@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="hr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Troškovi</title>
+
+  <!-- Ponašanje kao aplikacija kad se doda na početni zaslon (iPhone) -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Troškovi">
+  <meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="manifest" href="manifest.webmanifest">
+
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <div id="demo-banner">Demo način — podaci se spremaju samo u ovom pregledniku</div>
+
+  <!-- Prijava / registracija -->
+  <main id="auth" hidden></main>
+
+  <!-- Glavni dio aplikacije -->
+  <div id="app" hidden>
+    <header class="topbar"><h1 id="title"></h1></header>
+    <main id="view"></main>
+    <nav class="tabbar">
+      <button data-view="unos">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>
+        <span>Unos</span>
+      </button>
+      <button data-view="pregled">
+        <svg viewBox="0 0 24 24"><path d="M5 20V11M12 20V4M19 20v-6"/></svg>
+        <span>Pregled</span>
+      </button>
+      <button data-view="postavke">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>
+        <span>Račun</span>
+      </button>
+    </nav>
+  </div>
+
+  <!-- Donji prozor za uređivanje troška -->
+  <div id="sheet-backdrop" hidden></div>
+  <section id="sheet" hidden></section>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
