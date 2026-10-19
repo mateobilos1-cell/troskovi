@@ -1,7 +1,10 @@
 // Sloj za podatke: Supabase (oblak) ili demo način (localStorage) dok config.js nije popunjen.
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js';
 
-export const isDemo = !SUPABASE_URL || !SUPABASE_ANON_KEY;
+// ?demo radi samo lokalno (localhost) — za isprobavanje bez diranja pravih podataka
+const forceDemo = ['localhost', '127.0.0.1'].includes(location.hostname)
+  && new URLSearchParams(location.search).has('demo');
+export const isDemo = forceDemo || !SUPABASE_URL || !SUPABASE_ANON_KEY;
 
 let sb = null;
 if (!isDemo) {

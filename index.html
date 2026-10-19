@@ -27,19 +27,20 @@
 
   <!-- Glavni dio aplikacije -->
   <div id="app" hidden>
-    <header class="topbar"><h1 id="title"></h1></header>
+    <header class="navbar" id="navbar"><span class="nav-title" id="nav-title"></span></header>
+    <h1 class="large-title" id="title"></h1>
     <main id="view"></main>
     <nav class="tabbar">
       <button data-view="unos">
-        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>
+        <svg viewBox="0 0 24 24"><circle class="s f" cx="12" cy="12" r="9.5"/><path class="s k" d="M12 7.5v9M7.5 12h9"/></svg>
         <span>Unos</span>
       </button>
       <button data-view="pregled">
-        <svg viewBox="0 0 24 24"><path d="M5 20V11M12 20V4M19 20v-6"/></svg>
+        <svg viewBox="0 0 24 24"><rect class="s f" x="3.5" y="11" width="4" height="9.5" rx="1.2"/><rect class="s f" x="10" y="3.5" width="4" height="17" rx="1.2"/><rect class="s f" x="16.5" y="7.5" width="4" height="13" rx="1.2"/></svg>
         <span>Pregled</span>
       </button>
       <button data-view="postavke">
-        <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>
+        <svg viewBox="0 0 24 24"><circle class="s f" cx="12" cy="7.5" r="4"/><path class="s f" d="M4 20.5c.8-4 4-6.5 8-6.5s7.2 2.5 8 6.5z"/></svg>
         <span>Račun</span>
       </button>
     </nav>
