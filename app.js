@@ -317,6 +317,7 @@ const TITLES = { trosak: 'Novi trošak', prihod: 'Novi prihod', pregled: 'Pregle
 
 function go(view) {
   state.view = view;
+  lastDonutKey = null;
   $('#title').textContent = TITLES[view];
   $('#nav-title').textContent = TITLES[view];
   $$('.tabbar button').forEach((b) => b.classList.toggle('on', b.dataset.view === view));
@@ -486,6 +487,65 @@ async function renderEntry(kind) {
   wireItems(kind, $('#entry-extra'), recent);
 }
 
+// ---------- Prsten (donut) po kategorijama ----------
+const DONUT = { r: 80, w: 22, gap: 3 };
+const DONUT_C = 2 * Math.PI * DONUT.r;
+let lastDonutKey = null; // animira se samo kad se promijeni mjesec ili vrsta, ne kod odabira
+
+function donutChart(kind, catList, total, caption) {
+  // Kategorije ispod 3 % spajaju se u jedan sivi dio da prsten ne bude pun tankih trakica
+  const parts = [];
+  const small = { ids: [], v: 0, color: '#AEAEB2' };
+  catList.forEach(([id, v]) => {
+    if (v / total >= 0.03 || catList.length <= 2) parts.push({ ids: [id], v, color: cat(kind, id).color });
+    else { small.ids.push(id); small.v += v; }
+  });
+  if (small.v > 0) parts.push(small);
+
+  const sel = state.filterCat;
+  const gap = parts.length > 1 ? DONUT.gap : 0;
+  let offset = gap / 2;
+  const segs = parts.map((p) => {
+    const len = (p.v / total) * DONUT_C;
+    const dash = Math.max(len - gap, 0.8);
+    const on = sel && p.ids.includes(sel);
+    const html = `<circle class="seg ${sel && !on ? 'dim' : ''} ${on ? 'on' : ''}" ${p.ids.length === 1 ? `data-cat="${p.ids[0]}"` : ''}
+      cx="100" cy="100" r="${DONUT.r}" stroke="${p.color}" stroke-width="${DONUT.w}"
+      data-dash="${dash}" stroke-dasharray="${dash} ${DONUT_C}" stroke-dashoffset="${-offset}"/>`;
+    offset += len;
+    return html;
+  }).join('');
+
+  let center;
+  if (sel) {
+    const v = catList.find(([id]) => id === sel)?.[1] || 0;
+    const c = cat(kind, sel);
+    center = `<span class="dc-k">${c.icon} ${esc(c.label)}</span>
+      <span class="dc-v">${money(v)}</span><span class="dc-p">${Math.round((v / total) * 100)}% od ukupno</span>`;
+  } else {
+    center = `<span class="dc-k">${esc(caption)}</span><span class="dc-v">${money(total)}</span>
+      <span class="dc-p">${catList.length} ${catList.length === 1 ? 'kategorija' : catList.length < 5 ? 'kategorije' : 'kategorija'}</span>`;
+  }
+  return `
+    <div class="donut">
+      <svg viewBox="0 0 200 200" aria-hidden="true"><g transform="rotate(-90 100 100)">
+        <circle class="track" cx="100" cy="100" r="${DONUT.r}" stroke-width="${DONUT.w}"/>${segs}
+      </g></svg>
+      <div class="donut-center">${center}</div>
+    </div>`;
+}
+
+function animateDonut(root, key) {
+  if (key === lastDonutKey) return;
+  lastDonutKey = key;
+  const segs = $$('.donut .seg', root);
+  segs.forEach((s) => { s.style.transition = 'none'; s.setAttribute('stroke-dasharray', `0 ${DONUT_C}`); });
+  requestAnimationFrame(() => requestAnimationFrame(() => segs.forEach((s) => {
+    s.style.transition = '';
+    s.setAttribute('stroke-dasharray', `${s.dataset.dash} ${DONUT_C}`);
+  })));
+}
+
 // ---------- Pregled ----------
 async function renderPregled() {
   const m = state.month;
@@ -548,7 +608,6 @@ async function renderPregled() {
   const byCat = {};
   cur.forEach((r) => { byCat[r.category] = (byCat[r.category] || 0) + r.amount; });
   const catList = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
-  const maxCat = catList[0]?.[1] || 1;
 
   const days = daysIn(m);
   const perDay = Array(days).fill(0);
@@ -619,15 +678,13 @@ async function renderPregled() {
     ${catList.length ? `
     <div class="section-title"><span>${K.breakdown}</span></div>
     <div class="group">
+      ${donutChart(kind, catList, total, `${monthName(m)}`)}
       ${catList.map(([id, val]) => {
         const c = cat(kind, id);
         return `
-        <button type="button" class="row cat-row ${state.filterCat === id ? 'on' : ''}" data-cat="${id}" style="--c:${c.color}">
+        <button type="button" class="row cat-row legend ${state.filterCat === id ? 'on' : ''} ${state.filterCat && state.filterCat !== id ? 'dim' : ''}" data-cat="${id}" style="--c:${c.color}">
           <span class="ico-sq">${c.icon}</span>
-          <span class="main">
-            <span class="top"><span>${esc(c.label)}<span class="p">${Math.round((val / total) * 100)}%</span></span><span>${money(val)}</span></span>
-            <span class="bar"><i style="width:${(val / maxCat) * 100}%"></i></span>
-          </span>
+          <span class="main"><span class="top"><span>${esc(c.label)}<span class="p">${Math.round((val / total) * 100)}%</span></span><span>${money(val)}</span></span></span>
         </button>`;
       }).join('')}
     </div>` : ''}
@@ -676,6 +733,11 @@ async function renderPregled() {
     state.filterCat = state.filterCat === b.dataset.cat ? null : b.dataset.cat;
     render();
   }));
+  $$('.donut .seg[data-cat]', v).forEach((s) => s.addEventListener('click', () => {
+    state.filterCat = state.filterCat === s.dataset.cat ? null : s.dataset.cat;
+    render();
+  }));
+  animateDonut(v, `${isoDate(m)}|${kind}`);
   $$('.acc-row', v).forEach((b) => b.addEventListener('click', () => {
     state.filterAcc = state.filterAcc === b.dataset.acc ? null : b.dataset.acc;
     render();
