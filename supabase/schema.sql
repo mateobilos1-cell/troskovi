@@ -1,4 +1,5 @@
 -- Pokreni jednom u Supabase → SQL Editor → New query → Run.
+-- Tablica za prihode je u incomes.sql — pokreni i nju.
 
 create table if not exists public.expenses (
   id          uuid primary key default gen_random_uuid(),

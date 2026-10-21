@@ -183,8 +183,8 @@ function showAuth(mode, message) {
   el.innerHTML = `
     <div class="brand">
       <img src="icons/icon-192.png" alt="">
-      <h1>${isReset ? 'Nova lozinka' : 'Troškovi'}</h1>
-      <p>${isReset ? 'Poslat ćemo ti poveznicu za novu lozinku.' : 'Zapiši svaku potrošnju u par sekundi.'}</p>
+      <h1>${isReset ? 'Nova lozinka' : 'Fin<span class="plus">+</span>'}</h1>
+      <p>${isReset ? 'Poslat ćemo ti poveznicu za novu lozinku.' : 'Prati prihode i troškove i ostani u plusu.'}</p>
     </div>
     ${isReset ? '' : `
     <div class="segmented">
