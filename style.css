@@ -348,6 +348,38 @@ button.row:active, button.row.pressed { background: var(--fill); }
 .cat-row .p { color: var(--text2); margin-left: 6px; font-size: 15px; }
 .cat-row.on { background: color-mix(in srgb, var(--c) 10%, var(--card)); }
 
+/* Dnevnik: kalendar */
+#log-switch { margin: 0 0 12px; }
+.cal { padding: 12px 10px 10px; }
+.cal .wk, .cal .grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.cal .wk span { text-align: center; font-size: 12px; font-weight: 600; color: var(--text2); padding-bottom: 4px; letter-spacing: 0; }
+.day {
+  position: relative; border: 0; padding: 0; min-width: 0; aspect-ratio: 1 / 1.08; border-radius: 12px;
+  background: color-mix(in srgb, var(--tint) var(--heat), transparent);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
+  transition: transform .1s;
+}
+.day:active { transform: scale(.92); }
+.day .dn { font-size: 16px; font-weight: 500; font-variant-numeric: tabular-nums; letter-spacing: 0; line-height: 1.1; }
+.day .da { font-family: var(--rounded); font-size: 10px; font-weight: 600; color: var(--text2); min-height: 12px; letter-spacing: 0; line-height: 1.2; }
+.day .di, .cal-legend .di {
+  position: absolute; top: 5px; right: 5px; width: 6px; height: 6px; border-radius: 50%; background: var(--green);
+}
+.day.today .dn { color: var(--red); font-weight: 700; }
+.day.sel { background: var(--text); }
+.day.sel .dn, .day.sel .da { color: var(--bg); }
+.day.sel.today .dn { color: var(--red); }
+.day.sel .di { box-shadow: 0 0 0 1.5px var(--text); }
+.day.future { opacity: .3; pointer-events: none; }
+.cal-legend {
+  display: flex; justify-content: center; gap: 16px; margin-top: 10px;
+  font-size: 12px; color: var(--text2); letter-spacing: 0;
+}
+.cal-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.cal-legend .di { position: static; }
+.lg-heat { width: 14px; height: 10px; border-radius: 3px; background: linear-gradient(90deg, color-mix(in srgb, var(--tint) 15%, transparent), color-mix(in srgb, var(--tint) 55%, transparent)); }
+#day-detail { margin-top: 18px; }
+
 /* Prsten po kategorijama */
 .donut { position: relative; width: 220px; max-width: 70%; margin: 18px auto 10px; aspect-ratio: 1; }
 .donut svg { width: 100%; height: 100%; display: block; overflow: visible; }

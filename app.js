@@ -163,6 +163,8 @@ const state = {
   overviewKind: 'expense',
   filterCat: null,
   filterAcc: null, // id računa ili 'none'
+  logView: 'kalendar', // dnevnik u Pregledu: 'kalendar' ili 'popis'
+  selDay: null,
   pick: { expense: null, income: null },
   accounts: [],
 };
@@ -403,7 +405,7 @@ function itemRow(kind, r, showDate = false) {
   const acc = tracking() ? accById(r.account_id) : null;
   const sub = [showDate ? dayLabel(r.date) : null, acc ? esc(acc.name) : null, r.note ? esc(r.note) : null].filter(Boolean).join(' · ');
   return `
-    <button class="row item" data-id="${r.id}" style="--c:${c.color}">
+    <button class="row item" data-id="${r.id}" data-kind="${kind}" style="--c:${c.color}">
       <span class="ico-sq">${c.icon}</span>
       <span class="main"><span class="t">${esc(c.label)}</span>${sub ? `<span class="s">${sub}</span>` : ''}</span>
       <span class="amt ${kind === 'income' ? 'pos' : ''}">${KINDS[kind].sign}${money(r.amount)}</span>
@@ -640,6 +642,14 @@ async function renderPregled() {
     if (g && g.date === r.date) g.rows.push(r);
     else groups.push({ date: r.date, rows: [r] });
   });
+  const listHtml = groups.length ? groups.map((g) => `
+      <div class="group-header"><span>${dayLabel(g.date)}</span><span>${K.sign}${money(sum(g.rows))}</span></div>
+      <div class="group">${g.rows.map((r) => itemRow(kind, r)).join('')}</div>`).join('')
+    : `<div class="group empty">${K.empty}</div>`;
+  const filtered = !!(state.filterCat || state.filterAcc);
+
+  // Dnevnik: odabrani dan u kalendaru (u tekućem mjesecu zadano je danas)
+  if (!state.selDay || state.selDay.slice(0, 7) !== mFrom.slice(0, 7)) state.selDay = isCurrent ? today() : null;
 
   const v = $('#view');
   v.innerHTML = `
@@ -705,6 +715,7 @@ async function renderPregled() {
       }).join('')}
     </div>` : ''}
 
+    ${filtered ? `
     <div class="section-title">
       <span>${K.listTitle}</span>
       <span class="chips">
@@ -712,10 +723,13 @@ async function renderPregled() {
         ${state.filterAcc ? `<button type="button" class="filter-chip" id="clear-acc">${esc(accLabel(state.filterAcc)?.name)} <span class="x">✕</span></button>` : ''}
       </span>
     </div>
-    ${groups.length ? groups.map((g) => `
-      <div class="group-header"><span>${dayLabel(g.date)}</span><span>${K.sign}${money(sum(g.rows))}</span></div>
-      <div class="group">${g.rows.map((r) => itemRow(kind, r)).join('')}</div>`).join('')
-      : `<div class="group empty">${K.empty}</div>`}
+    ${listHtml}` : `
+    <div class="section-title"><span>Dnevnik</span></div>
+    <div class="segmented" id="log-switch">
+      <button type="button" data-log="kalendar">Kalendar</button>
+      <button type="button" data-log="popis">Popis</button>
+    </div>
+    <div id="log"></div>`}
   `;
 
   const resetFilters = () => { state.filterCat = null; state.filterAcc = null; };
@@ -742,7 +756,88 @@ async function renderPregled() {
     state.filterAcc = state.filterAcc === b.dataset.acc ? null : b.dataset.acc;
     render();
   }));
-  wireItems(kind, v, cur);
+
+  if (filtered) {
+    wireItems(kind, v, cur);
+  } else {
+    // Dnevnik se osvježava lokalno (bez novog učitavanja) kod odabira dana ili prebacivanja prikaza
+    const ctx = { m, kind, cur, listHtml, exp: curOf(expRows), inc: curOf(incRows) };
+    $$('#log-switch button', v).forEach((b) => b.addEventListener('click', () => {
+      state.logView = b.dataset.log;
+      renderLog(ctx);
+    }));
+    renderLog(ctx);
+  }
+}
+
+// ---------- Dnevnik: kalendar ili popis ----------
+const WEEK_SHORT = ['P', 'U', 'S', 'Č', 'P', 'S', 'N'];
+// Kratki iznos za ćeliju kalendara: 24, 245, 1,2k
+const compact = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1).replace('.0', '').replace('.', ',')}k` : String(Math.round(n)));
+
+function calendarHtml(m, exp, inc) {
+  const days = daysIn(m);
+  const lead = (new Date(m.getFullYear(), m.getMonth(), 1).getDay() + 6) % 7; // tjedan počinje ponedjeljkom
+  const e = Array(days + 1).fill(0);
+  const i = Array(days + 1).fill(0);
+  exp.forEach((r) => { e[Number(r.date.slice(8, 10))] += r.amount; });
+  inc.forEach((r) => { i[Number(r.date.slice(8, 10))] += r.amount; });
+  const max = Math.max(...e, 1);
+  const t = today();
+  const prefix = isoDate(m).slice(0, 8);
+
+  let cells = '<span></span>'.repeat(lead);
+  for (let d = 1; d <= days; d++) {
+    const iso = prefix + pad(d);
+    // jačina boje prati koliko je potrošeno tog dana
+    const heat = e[d] > 0 ? Math.round(10 + (e[d] / max) * 45) : 0;
+    cells += `
+      <button type="button" class="day ${iso === t ? 'today' : ''} ${iso === state.selDay ? 'sel' : ''} ${iso > t ? 'future' : ''}"
+        data-day="${iso}" style="--heat:${heat}%" aria-label="${d}. — ${money(e[d])}">
+        <span class="dn">${d}</span>
+        <span class="da">${e[d] > 0 ? compact(e[d]) : ''}</span>
+        ${i[d] > 0 ? '<span class="di"></span>' : ''}
+      </button>`;
+  }
+  return `
+    <div class="group cal">
+      <div class="wk">${WEEK_SHORT.map((w) => `<span>${w}</span>`).join('')}</div>
+      <div class="grid">${cells}</div>
+      <div class="cal-legend"><span><i class="lg-heat"></i>potrošeno (€)</span><span><i class="di"></i>prihod</span></div>
+    </div>`;
+}
+
+function dayHtml(iso, exp, inc) {
+  if (!iso) return '<div class="group empty">Dodirni dan u kalendaru da vidiš njegove troškove i prihode.</div>';
+  const de = exp.filter((r) => r.date === iso);
+  const di = inc.filter((r) => r.date === iso);
+  const totals = [de.length ? `−${money(sum(de))}` : '', di.length ? `<span class="pos">+${money(sum(di))}</span>` : '']
+    .filter(Boolean).join(' · ');
+  const rows = [...di.map((r) => itemRow('income', r)), ...de.map((r) => itemRow('expense', r))];
+  return `
+    <div class="group-header"><span>${dayLabel(iso)}</span><span>${totals}</span></div>
+    ${rows.length ? `<div class="group">${rows.join('')}</div>` : '<div class="group empty">Nema unosa za ovaj dan.</div>'}`;
+}
+
+function renderLog(ctx) {
+  const el = $('#log');
+  if (!el) return;
+  $$('#log-switch button').forEach((b) => b.classList.toggle('on', b.dataset.log === state.logView));
+  if (state.logView === 'popis') {
+    el.innerHTML = ctx.listHtml;
+    wireItems(ctx.kind, el, ctx.cur);
+    return;
+  }
+  el.innerHTML = `${calendarHtml(ctx.m, ctx.exp, ctx.inc)}<div id="day-detail">${dayHtml(state.selDay, ctx.exp, ctx.inc)}</div>`;
+  $$('.day', el).forEach((b) => b.addEventListener('click', () => {
+    state.selDay = b.dataset.day;
+    renderLog(ctx);
+  }));
+  $$('.item', el).forEach((b) => b.addEventListener('click', () => {
+    const rows = b.dataset.kind === 'income' ? ctx.inc : ctx.exp;
+    const r = rows.find((x) => x.id === b.dataset.id);
+    if (r) openEdit(b.dataset.kind, r);
+  }));
 }
 
 // ---------- Postavke ----------
