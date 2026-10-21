@@ -733,8 +733,8 @@ async function renderPregled() {
   `;
 
   const resetFilters = () => { state.filterCat = null; state.filterAcc = null; };
-  $('#prev-m').addEventListener('click', () => { state.month = addMonths(state.month, -1); resetFilters(); render(); });
-  $('#next-m').addEventListener('click', () => { state.month = addMonths(state.month, 1); resetFilters(); render(); });
+  $('#prev-m').addEventListener('click', () => changeMonth(-1));
+  $('#next-m').addEventListener('click', () => changeMonth(1));
   $('#clear-cat')?.addEventListener('click', () => { state.filterCat = null; render(); });
   $('#clear-acc')?.addEventListener('click', () => { state.filterAcc = null; render(); });
   $$('#kind-switch button', v).forEach((b) => b.addEventListener('click', () => {
@@ -775,6 +775,26 @@ const WEEK_SHORT = ['P', 'U', 'S', 'Č', 'P', 'S', 'N'];
 // Kratki iznos za ćeliju kalendara: 24, 245, 1,2k
 const compact = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1).replace('.0', '').replace('.', ',')}k` : String(Math.round(n)));
 
+// Mijenja mjesec za cijeli Pregled. Iz kalendara (keepCalendar) zadržava kalendar na istom mjestu na ekranu.
+let changingMonth = false;
+async function changeMonth(delta, keepCalendar = false) {
+  const next = addMonths(state.month, delta);
+  if (changingMonth || next > monthStart(new Date())) return;
+  changingMonth = true;
+  const before = keepCalendar ? $('.cal')?.getBoundingClientRect().top : null;
+  state.month = next;
+  state.filterCat = null;
+  state.filterAcc = null;
+  state.calAnim = keepCalendar ? (delta > 0 ? 'from-right' : 'from-left') : null;
+  try {
+    await render();
+    const after = $('.cal')?.getBoundingClientRect().top;
+    if (before != null && after != null) window.scrollBy(0, after - before);
+  } finally {
+    changingMonth = false;
+  }
+}
+
 function calendarHtml(m, exp, inc) {
   const days = daysIn(m);
   const lead = (new Date(m.getFullYear(), m.getMonth(), 1).getDay() + 6) % 7; // tjedan počinje ponedjeljkom
@@ -799,10 +819,20 @@ function calendarHtml(m, exp, inc) {
         ${i[d] > 0 ? '<span class="di"></span>' : ''}
       </button>`;
   }
+  const isCurrent = m.getTime() === monthStart(new Date()).getTime();
+  const anim = state.calAnim || '';
+  state.calAnim = null; // animacija samo jednom, ne kod odabira dana
   return `
     <div class="group cal">
+      <div class="cal-head">
+        <span class="cal-title">${monthName(m)} ${m.getFullYear()}.</span>
+        <span class="cal-nav">
+          <button type="button" class="cal-prev" aria-label="Prethodni mjesec">${CHEVRON_L}</button>
+          <button type="button" class="cal-next" aria-label="Sljedeći mjesec" ${isCurrent ? 'disabled' : ''}>${CHEVRON_R}</button>
+        </span>
+      </div>
       <div class="wk">${WEEK_SHORT.map((w) => `<span>${w}</span>`).join('')}</div>
-      <div class="grid">${cells}</div>
+      <div class="grid ${anim}">${cells}</div>
       <div class="cal-legend"><span><i class="lg-heat"></i>potrošeno (€)</span><span><i class="di"></i>prihod</span></div>
     </div>`;
 }
@@ -833,6 +863,19 @@ function renderLog(ctx) {
     state.selDay = b.dataset.day;
     renderLog(ctx);
   }));
+  $('.cal-prev', el).addEventListener('click', () => changeMonth(-1, true));
+  $('.cal-next', el).addEventListener('click', () => changeMonth(1, true));
+
+  // Povlačenje prstom lijevo/desno po kalendaru mijenja mjesec
+  const cal = $('.cal', el);
+  let sx = 0;
+  let sy = 0;
+  cal.addEventListener('touchstart', (e) => { sx = e.touches[0].clientX; sy = e.touches[0].clientY; }, { passive: true });
+  cal.addEventListener('touchend', (e) => {
+    const dx = e.changedTouches[0].clientX - sx;
+    const dy = e.changedTouches[0].clientY - sy;
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) changeMonth(dx < 0 ? 1 : -1, true);
+  }, { passive: true });
   $$('.item', el).forEach((b) => b.addEventListener('click', () => {
     const rows = b.dataset.kind === 'income' ? ctx.inc : ctx.exp;
     const r = rows.find((x) => x.id === b.dataset.id);

@@ -351,6 +351,20 @@ button.row:active, button.row.pressed { background: var(--fill); }
 /* Dnevnik: kalendar */
 #log-switch { margin: 0 0 12px; }
 .cal { padding: 12px 10px 10px; }
+.cal-head { display: flex; align-items: center; justify-content: space-between; padding: 2px 6px 12px; }
+.cal-title { font-size: 20px; font-weight: 700; letter-spacing: .38px; }
+.cal-nav { display: flex; gap: 8px; }
+.cal-nav button {
+  border: 0; background: var(--fill); color: var(--tint); width: 34px; height: 34px; border-radius: 50%;
+  display: grid; place-items: center;
+}
+.cal-nav svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+.cal-nav button:disabled { opacity: .35; }
+.cal .grid { touch-action: pan-y; }
+.cal .grid.from-right { animation: cal-from-right .3s cubic-bezier(.2, .8, .3, 1); }
+.cal .grid.from-left { animation: cal-from-left .3s cubic-bezier(.2, .8, .3, 1); }
+@keyframes cal-from-right { from { transform: translateX(40px); opacity: 0; } }
+@keyframes cal-from-left { from { transform: translateX(-40px); opacity: 0; } }
 .cal .wk, .cal .grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
 .cal .wk span { text-align: center; font-size: 12px; font-weight: 600; color: var(--text2); padding-bottom: 4px; letter-spacing: 0; }
 .day {
