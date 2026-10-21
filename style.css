@@ -123,6 +123,7 @@ button.row:active, button.row.pressed { background: var(--fill); }
   background: var(--tint); color: #fff; font-weight: 600; font-size: 17px;
   transition: opacity .15s, transform .1s;
 }
+.btn-filled.green { background: var(--green); }
 .btn-filled:active { opacity: .75; transform: scale(.98); }
 .btn-filled:disabled { opacity: .4; }
 .btn-plain {
@@ -186,7 +187,7 @@ button.row:active, button.row.pressed { background: var(--fill); }
 .tabbar {
   position: fixed; z-index: 10; left: 50%; transform: translateX(-50%);
   bottom: max(10px, env(safe-area-inset-bottom));
-  width: min(calc(100% - 40px), 360px); height: var(--tabbar-h);
+  width: min(calc(100% - 32px), 420px); height: var(--tabbar-h);
   display: flex; padding: 4px; border-radius: 999px;
   background: var(--bar-glass);
   -webkit-backdrop-filter: saturate(180%) blur(24px); backdrop-filter: saturate(180%) blur(24px);
@@ -216,6 +217,7 @@ button.row:active, button.row.pressed { background: var(--fill); }
 }
 .amount-line input::placeholder { color: var(--text3); }
 .amount-line .cur { font-family: var(--rounded); font-size: 34px; font-weight: 600; color: var(--text2); }
+.amount-line .sign { color: var(--green); }
 
 .cats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px 4px; padding: 12px 8px 10px; }
 .cat {
@@ -269,6 +271,25 @@ button.row:active, button.row.pressed { background: var(--fill); }
 .delta { font-size: 15px; letter-spacing: -.24px; font-weight: 600; margin-top: 6px; }
 .delta.up { color: var(--red); }
 .delta.down { color: var(--green); }
+.pos { color: var(--green); }
+.neg { color: var(--red); }
+
+.balance .split { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 10px 0 12px; }
+.balance .split > div {
+  background: var(--fill); border-radius: 14px; padding: 9px 12px;
+  font-size: 13px; color: var(--text2); letter-spacing: -.08px;
+}
+.balance .split b {
+  display: block; margin-top: 1px; font-family: var(--rounded); font-size: 18px; letter-spacing: 0;
+}
+.balance .split b:not(.pos) { color: var(--text); }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
+.meter { height: 8px; border-radius: 4px; background: color-mix(in srgb, var(--green) 25%, var(--card)); overflow: hidden; margin-bottom: 6px; }
+.meter i { display: block; height: 100%; border-radius: 4px; background: var(--tint); }
+.meter.over { background: var(--fill); }
+.meter.over i { background: var(--red); }
+#kind-switch { margin: 0 0 16px; }
+
 .chart { margin-top: 16px; }
 .chart svg { width: 100%; height: 96px; display: block; }
 .chart .axis { display: flex; justify-content: space-between; font-size: 11px; color: var(--text2); margin-top: 5px; letter-spacing: 0; }

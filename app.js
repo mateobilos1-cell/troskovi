@@ -2,7 +2,7 @@ import * as db from './db.js';
 
 // ---------- Kategorije ----------
 // id se sprema u bazu — ne mijenjaj postojeće id-jeve, slobodno mijenjaj nazive, ikone i boje.
-const CATEGORIES = [
+const EXPENSE_CATEGORIES = [
   { id: 'namirnice', label: 'Namirnice', icon: '🛒', color: '#34C759' },
   { id: 'restorani', label: 'Kafići', icon: '☕', color: '#FF9500' },
   { id: 'prijevoz', label: 'Prijevoz', icon: '🚗', color: '#007AFF' },
@@ -16,8 +16,46 @@ const CATEGORIES = [
   { id: 'pokloni', label: 'Pokloni', icon: '🎁', color: '#A2845E' },
   { id: 'ostalo', label: 'Ostalo', icon: '📦', color: '#8E8E93' },
 ];
-const CAT = Object.fromEntries(CATEGORIES.map((c) => [c.id, c]));
-const cat = (id) => CAT[id] || CAT.ostalo;
+const INCOME_CATEGORIES = [
+  { id: 'placa', label: 'Plaća', icon: '💼', color: '#34C759' },
+  { id: 'topli_obrok', label: 'Topli obrok', icon: '🍽️', color: '#FF9500' },
+  { id: 'honorar', label: 'Honorar', icon: '🧾', color: '#007AFF' },
+  { id: 'bonus', label: 'Bonus', icon: '⭐', color: '#FFCC00' },
+  { id: 'poklon', label: 'Poklon', icon: '🎁', color: '#FF2D55' },
+  { id: 'povrat', label: 'Povrat novca', icon: '↩️', color: '#5AC8FA' },
+  { id: 'prodaja', label: 'Prodaja', icon: '🏷️', color: '#AF52DE' },
+  { id: 'ostalo', label: 'Ostalo', icon: '💰', color: '#8E8E93' },
+];
+
+// Sve što se razlikuje između troškova i prihoda
+const KINDS = {
+  expense: {
+    cats: EXPENSE_CATEGORIES,
+    sign: '',
+    totalLabel: 'Ukupno potrošeno',
+    breakdown: 'Na što trošiš',
+    listTitle: 'Troškovi',
+    editTitle: 'Uredi trošak',
+    deleteLabel: 'Obriši trošak',
+    empty: 'Nema troškova u ovom mjesecu.',
+    color: 'var(--tint)',
+    moreIsGood: false,
+  },
+  income: {
+    cats: INCOME_CATEGORIES,
+    sign: '+',
+    totalLabel: 'Ukupno zarađeno',
+    breakdown: 'Odakle dolazi novac',
+    listTitle: 'Prihodi',
+    editTitle: 'Uredi prihod',
+    deleteLabel: 'Obriši prihod',
+    empty: 'Nema prihoda u ovom mjesecu.',
+    color: 'var(--green)',
+    moreIsGood: true,
+  },
+};
+const CAT_INDEX = Object.fromEntries(Object.entries(KINDS).map(([k, v]) => [k, Object.fromEntries(v.cats.map((c) => [c.id, c]))]));
+const cat = (kind, id) => CAT_INDEX[kind][id] || CAT_INDEX[kind].ostalo;
 
 const MONTHS = ['siječanj', 'veljača', 'ožujak', 'travanj', 'svibanj', 'lipanj',
   'srpanj', 'kolovoz', 'rujan', 'listopad', 'studeni', 'prosinac'];
@@ -28,6 +66,7 @@ const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const fmt = new Intl.NumberFormat('hr-HR', { style: 'currency', currency: 'EUR' });
 const money = (n) => fmt.format(n);
+const signed = (n) => (n > 0 ? '+' : n < 0 ? '−' : '') + fmt.format(Math.abs(n));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const pad = (n) => String(n).padStart(2, '0');
 const isoDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -65,6 +104,8 @@ function toast(text, isError = false) {
   toastTimer = setTimeout(() => el.classList.remove('show'), isError ? 4000 : 2000);
 }
 
+const isMissingTable = (e) => ['PGRST205', '42P01'].includes(e?.code) || /could not find the table|does not exist/i.test(e?.message || '');
+
 function errorText(e) {
   const code = e?.code || '';
   const msg = String(e?.message || e || '');
@@ -74,6 +115,7 @@ function errorText(e) {
   if (code === 'weak_password' || /password should be/i.test(msg)) return 'Lozinka mora imati barem 6 znakova.';
   if (/rate limit|too many/i.test(msg)) return 'Previše pokušaja. Pričekaj malo pa pokušaj ponovno.';
   if (/failed to fetch|network/i.test(msg)) return 'Nema veze s internetom.';
+  if (isMissingTable(e)) return 'Tablica za prihode još ne postoji — pokreni supabase/incomes.sql u Supabaseu.';
   return msg || 'Nešto je pošlo po zlu.';
 }
 
@@ -96,10 +138,11 @@ const state = {
   user: null,
   started: false,
   recovering: false,
-  view: 'unos',
+  view: 'trosak',
   month: monthStart(new Date()),
+  overviewKind: 'expense',
   filterCat: null,
-  addCat: null,
+  pick: { expense: null, income: null },
 };
 
 // ---------- Pokretanje ----------
@@ -127,7 +170,7 @@ function setUser(user) {
   state.user = user;
   if (same && state.started) return;
   state.started = true;
-  if (user) { $('#auth').hidden = true; $('#app').hidden = false; go('unos'); }
+  if (user) { $('#auth').hidden = true; $('#app').hidden = false; go('trosak'); }
   else { closeSheet(); $('#app').hidden = true; showAuth('login'); }
 }
 
@@ -231,7 +274,7 @@ function showRecovery() {
 }
 
 // ---------- Navigacija ----------
-const TITLES = { unos: 'Novi trošak', pregled: 'Pregled', postavke: 'Račun' };
+const TITLES = { trosak: 'Novi trošak', prihod: 'Novi prihod', pregled: 'Pregled', racun: 'Račun' };
 
 function go(view) {
   state.view = view;
@@ -246,7 +289,8 @@ function go(view) {
 async function render() {
   const view = state.view;
   try {
-    if (view === 'unos') await renderUnos();
+    if (view === 'trosak') await renderEntry('expense');
+    else if (view === 'prihod') await renderEntry('income');
     else if (view === 'pregled') await renderPregled();
     else renderRacun();
   } catch (e) {
@@ -255,8 +299,8 @@ async function render() {
 }
 
 // ---------- Zajednički dijelovi ----------
-function catButtons(selected) {
-  return CATEGORIES.map((c) => `
+function catButtons(kind, selected) {
+  return KINDS[kind].cats.map((c) => `
     <button type="button" class="cat ${c.id === selected ? 'on' : ''}" data-cat="${c.id}" style="--c:${c.color}">
       <span class="sq">${c.icon}</span><span class="lbl">${esc(c.label)}</span>
     </button>`).join('');
@@ -270,74 +314,77 @@ function wireCats(root, onPick) {
 }
 
 // Iznos, kategorije, bilješka i datum — isto za unos i uređivanje
-function expenseFields({ amount = '', category = null, note = '', date = today() } = {}) {
+function entryFields(kind, { amount = '', category = null, note = '', date = today() } = {}) {
   return `
     <div class="group amount-group">
       <label class="amount-line">
+        ${kind === 'income' ? '<span class="cur sign">+</span>' : ''}
         <input class="amount" inputmode="decimal" placeholder="0,00" value="${esc(amount)}" autocomplete="off" enterkeyhint="done" aria-label="Iznos">
         <span class="cur">€</span>
       </label>
     </div>
-    <div class="group"><div class="cats">${catButtons(category)}</div></div>
+    <div class="group"><div class="cats">${catButtons(kind, category)}</div></div>
     <div class="group">
       <label class="row"><input class="row-input note" placeholder="Bilješka (neobavezno)" maxlength="100" value="${esc(note)}" autocomplete="off"></label>
       <label class="row"><span class="label">Datum</span><input class="pill-date date" type="date" value="${date}" max="${today()}" aria-label="Datum"></label>
     </div>`;
 }
 
-function itemRow(r, showDate = false) {
-  const c = cat(r.category);
-  const sub = [showDate ? dayLabel(r.spent_at) : null, r.note ? esc(r.note) : null].filter(Boolean).join(' · ');
+function itemRow(kind, r, showDate = false) {
+  const c = cat(kind, r.category);
+  const sub = [showDate ? dayLabel(r.date) : null, r.note ? esc(r.note) : null].filter(Boolean).join(' · ');
   return `
     <button class="row item" data-id="${r.id}" style="--c:${c.color}">
       <span class="ico-sq">${c.icon}</span>
       <span class="main"><span class="t">${esc(c.label)}</span>${sub ? `<span class="s">${sub}</span>` : ''}</span>
-      <span class="amt">${money(r.amount)}</span>
+      <span class="amt ${kind === 'income' ? 'pos' : ''}">${KINDS[kind].sign}${money(r.amount)}</span>
       <span class="chev"></span>
     </button>`;
 }
 
-function wireItems(root, rows) {
+function wireItems(kind, root, rows) {
   $$('.item', root).forEach((b) => b.addEventListener('click', () => {
     const r = rows.find((x) => x.id === b.dataset.id);
-    if (r) openEdit(r);
+    if (r) openEdit(kind, r);
   }));
 }
 
-// ---------- Unos ----------
-async function renderUnos() {
+// ---------- Unos troška / prihoda ----------
+async function renderEntry(kind) {
+  const view = state.view;
   const v = $('#view');
   // Forma se prikaže odmah; brojke i zadnji unosi stignu kad se učitaju.
   v.innerHTML = `
     <form id="add-form" novalidate>
-      ${expenseFields({ category: state.addCat })}
-      <button class="btn-filled" type="submit">Spremi</button>
+      ${entryFields(kind, { category: state.pick[kind] })}
+      <button class="btn-filled ${kind === 'income' ? 'green' : ''}" type="submit">Spremi</button>
     </form>
-    <div id="unos-extra"></div>`;
+    <div id="entry-extra"></div>`;
 
   const form = $('#add-form');
   const amountEl = $('.amount', form);
   wireAmount(amountEl);
-  wireCats(form, (id) => { state.addCat = id; });
+  wireCats(form, (id) => { state.pick[kind] = id; });
 
   form.addEventListener('submit', async (ev) => {
     ev.preventDefault();
     const amount = parseAmount(amountEl.value);
     if (!(amount > 0)) { amountEl.focus(); return toast('Upiši iznos', true); }
-    if (!state.addCat) return toast('Odaberi kategoriju', true);
+    const category = state.pick[kind];
+    if (!category) return toast('Odaberi kategoriju', true);
     const btn = $('button[type=submit]', form);
     btn.disabled = true;
     try {
-      await db.addExpense({
+      await db.add(kind, {
         amount,
-        category: state.addCat,
+        category,
         note: $('.note', form).value.trim() || null,
-        spent_at: $('.date', form).value || today(),
+        date: $('.date', form).value || today(),
       });
-      toast(`${cat(state.addCat).icon}  ${money(amount)} spremljeno`);
-      state.addCat = null;
+      toast(`${cat(kind, category).icon}  ${KINDS[kind].sign}${money(amount)} spremljeno`);
+      state.pick[kind] = null;
       window.scrollTo(0, 0);
-      await renderUnos();
+      await renderEntry(kind);
     } catch (e) {
       toast(errorText(e), true);
       btn.disabled = false;
@@ -345,75 +392,117 @@ async function renderUnos() {
   });
 
   const m = monthStart(new Date());
-  const [monthRows, recent] = await Promise.all([
-    db.listExpenses(isoDate(m), isoDate(addMonths(m, 1))),
-    db.listRecent(8),
+  const from = isoDate(m);
+  const to = isoDate(addMonths(m, 1));
+  const [monthRows, recent, other] = await Promise.all([
+    db.list(kind, from, to),
+    db.listRecent(kind, 8),
+    kind === 'income' ? db.list('expense', from, to) : null,
   ]);
-  if (state.view !== 'unos') return;
-  const t = today();
-  $('#unos-extra').innerHTML = `
-    <div class="stats">
-      <div class="stat"><div class="k">Danas</div><div class="v">${money(sum(monthRows.filter((r) => r.spent_at === t)))}</div></div>
-      <div class="stat"><div class="k">${monthName(m)}</div><div class="v">${money(sum(monthRows))}</div></div>
-    </div>
+  if (state.view !== view) return;
+
+  let stats;
+  if (kind === 'expense') {
+    stats = `
+      <div class="stat"><div class="k">Danas</div><div class="v">${money(sum(monthRows.filter((r) => r.date === today())))}</div></div>
+      <div class="stat"><div class="k">${monthName(m)}</div><div class="v">${money(sum(monthRows))}</div></div>`;
+  } else {
+    const balance = sum(monthRows) - sum(other);
+    stats = `
+      <div class="stat"><div class="k">Prihodi · ${MONTHS[m.getMonth()]}</div><div class="v pos">${money(sum(monthRows))}</div></div>
+      <div class="stat"><div class="k">Bilanca</div><div class="v ${balance < 0 ? 'neg' : ''}">${signed(balance)}</div></div>`;
+  }
+
+  $('#entry-extra').innerHTML = `
+    <div class="stats">${stats}</div>
     <div class="section-title"><span>Zadnji unosi</span></div>
     ${recent.length
-      ? `<div class="group">${recent.map((r) => itemRow(r, true)).join('')}</div>`
-      : '<div class="group empty">Još nema unosa. Upiši prvi trošak gore.</div>'}`;
-  wireItems($('#unos-extra'), recent);
+      ? `<div class="group">${recent.map((r) => itemRow(kind, r, true)).join('')}</div>`
+      : `<div class="group empty">${kind === 'income' ? 'Još nema prihoda. Upiši plaću ili drugi prihod gore.' : 'Još nema unosa. Upiši prvi trošak gore.'}</div>`}`;
+  wireItems(kind, $('#entry-extra'), recent);
 }
 
 // ---------- Pregled ----------
 async function renderPregled() {
   const m = state.month;
   const prev = addMonths(m, -1);
-  const rows = await db.listExpenses(isoDate(prev), isoDate(addMonths(m, 1)));
+  const from = isoDate(prev);
+  const to = isoDate(addMonths(m, 1));
+  let incomeError = null;
+  const [expRows, incRows] = await Promise.all([
+    db.list('expense', from, to),
+    // ako tablica za prihode još nije napravljena, pregled troškova i dalje radi
+    db.list('income', from, to).catch((e) => { incomeError = e; return []; }),
+  ]);
   if (state.view !== 'pregled') return;
 
   const mFrom = isoDate(m);
-  const cur = rows.filter((r) => r.spent_at >= mFrom);
-  const prevRows = rows.filter((r) => r.spent_at < mFrom);
   const now = new Date();
   const isCurrent = m.getTime() === monthStart(now).getTime();
+  const curOf = (rows) => rows.filter((r) => r.date >= mFrom);
+  const income = sum(curOf(incRows));
+  const spent = sum(curOf(expRows));
+
+  // ----- Bilanca: prihodi − troškovi -----
+  const balance = income - spent;
+  let balanceBody;
+  if (incomeError) {
+    balanceBody = `<div class="sub">${esc(errorText(incomeError))}</div>`;
+  } else if (income === 0) {
+    balanceBody = `<div class="sub">Za ovaj mjesec još nema prihoda. Dodaj ih na kartici <b>Prihod</b> pa ćeš ovdje vidjeti koliko ti ostaje.</div>`;
+  } else {
+    const pct = Math.round((spent / income) * 100);
+    balanceBody = `
+      <div class="meter ${pct > 100 ? 'over' : ''}"><i style="width:${Math.min(pct, 100)}%"></i></div>
+      <div class="sub">${pct > 100
+        ? `Potrošio si ${pct - 100}% više nego što si zaradio.`
+        : `Potrošio si ${pct}% prihoda.`}</div>`;
+  }
+
+  // ----- Detalji za odabranu vrstu (troškovi ili prihodi) -----
+  const kind = state.overviewKind;
+  const K = KINDS[kind];
+  const rows = kind === 'income' ? incRows : expRows;
+  const cur = curOf(rows);
+  const prevRows = rows.filter((r) => r.date < mFrom);
   const total = sum(cur);
 
   // Usporedba: za tekući mjesec gleda isto razdoblje prošlog mjeseca (1. – današnji dan)
   const cutoff = isCurrent ? `${isoDate(prev).slice(0, 8)}${pad(now.getDate())}` : null;
-  const prevTotal = sum(cutoff ? prevRows.filter((r) => r.spent_at <= cutoff) : prevRows);
+  const prevTotal = sum(cutoff ? prevRows.filter((r) => r.date <= cutoff) : prevRows);
   const daysElapsed = isCurrent ? now.getDate() : daysIn(m);
   let delta = '';
   if (prevTotal > 0 && total > 0) {
     const pct = Math.round(((total - prevTotal) / prevTotal) * 100);
     const span = isCurrent ? 'isto razdoblje prošlog mjeseca' : MONTHS[prev.getMonth()];
+    const good = (pct > 0) === K.moreIsGood;
     delta = pct === 0
       ? `<div class="delta">Jednako kao ${span}</div>`
-      : `<div class="delta ${pct > 0 ? 'up' : 'down'}">${pct > 0 ? '▲' : '▼'} ${Math.abs(pct)}% ${pct > 0 ? 'više' : 'manje'} nego ${span} (${money(prevTotal)})</div>`;
+      : `<div class="delta ${good ? 'down' : 'up'}">${pct > 0 ? '▲' : '▼'} ${Math.abs(pct)}% ${pct > 0 ? 'više' : 'manje'} nego ${span} (${money(prevTotal)})</div>`;
   }
 
-  // Po kategorijama
   const byCat = {};
   cur.forEach((r) => { byCat[r.category] = (byCat[r.category] || 0) + r.amount; });
   const catList = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
   const maxCat = catList[0]?.[1] || 1;
 
-  // Po danima
   const days = daysIn(m);
   const perDay = Array(days).fill(0);
-  cur.forEach((r) => { perDay[Number(r.spent_at.slice(8, 10)) - 1] += r.amount; });
+  cur.forEach((r) => { perDay[Number(r.date.slice(8, 10)) - 1] += r.amount; });
   const maxDay = Math.max(...perDay, 1);
   const bars = perDay.map((val, i) => {
     const h = val > 0 ? Math.max(3, (val / maxDay) * 90) : 0;
     const isToday = isCurrent && i === now.getDate() - 1;
     return `<rect x="${i * 10 + 1.5}" y="${96 - h}" width="7" height="${h}" rx="2.5"
-      fill="${isToday ? 'var(--tint)' : 'color-mix(in srgb, var(--tint) 45%, var(--card))'}"><title>${i + 1}. — ${money(val)}</title></rect>`;
+      fill="${isToday ? K.color : `color-mix(in srgb, ${K.color} 45%, var(--card))`}"><title>${i + 1}. — ${money(val)}</title></rect>`;
   }).join('');
 
   const shown = state.filterCat ? cur.filter((r) => r.category === state.filterCat) : cur;
   const groups = [];
   shown.forEach((r) => {
     const g = groups[groups.length - 1];
-    if (g && g.date === r.spent_at) g.rows.push(r);
-    else groups.push({ date: r.spent_at, rows: [r] });
+    if (g && g.date === r.date) g.rows.push(r);
+    else groups.push({ date: r.date, rows: [r] });
   });
 
   const v = $('#view');
@@ -424,10 +513,25 @@ async function renderPregled() {
       <button type="button" id="next-m" aria-label="Sljedeći mjesec" ${isCurrent ? 'disabled' : ''}>${CHEVRON_R}</button>
     </div>
 
+    <div class="group total balance">
+      <div class="k">Bilanca</div>
+      <div class="big ${balance < 0 ? 'neg' : income > 0 ? 'pos' : ''}">${signed(balance)}</div>
+      <div class="split">
+        <div><span class="dot" style="background:var(--green)"></span>Prihodi<b class="pos">${money(income)}</b></div>
+        <div><span class="dot" style="background:var(--tint)"></span>Troškovi<b>${money(spent)}</b></div>
+      </div>
+      ${balanceBody}
+    </div>
+
+    <div class="segmented" id="kind-switch">
+      <button type="button" data-kind="expense" class="${kind === 'expense' ? 'on' : ''}">Troškovi</button>
+      <button type="button" data-kind="income" class="${kind === 'income' ? 'on' : ''}">Prihodi</button>
+    </div>
+
     <div class="group total">
-      <div class="k">Ukupno potrošeno</div>
-      <div class="big">${money(total)}</div>
-      <div class="sub">${cur.length} ${cur.length === 1 ? 'trošak' : 'troškova'} · prosjek ${money(total / daysElapsed)} dnevno</div>
+      <div class="k">${K.totalLabel}</div>
+      <div class="big ${kind === 'income' && total > 0 ? 'pos' : ''}">${money(total)}</div>
+      <div class="sub">${cur.length} ${cur.length === 1 ? 'unos' : 'unosa'} · prosjek ${money(total / daysElapsed)} dnevno</div>
       ${delta}
       <div class="chart">
         <svg viewBox="0 0 ${days * 10} 96" preserveAspectRatio="none" aria-hidden="true">${bars}</svg>
@@ -436,10 +540,10 @@ async function renderPregled() {
     </div>
 
     ${catList.length ? `
-    <div class="section-title"><span>Na što trošiš</span></div>
+    <div class="section-title"><span>${K.breakdown}</span></div>
     <div class="group">
       ${catList.map(([id, val]) => {
-        const c = cat(id);
+        const c = cat(kind, id);
         return `
         <button type="button" class="row cat-row ${state.filterCat === id ? 'on' : ''}" data-cat="${id}" style="--c:${c.color}">
           <span class="ico-sq">${c.icon}</span>
@@ -452,23 +556,29 @@ async function renderPregled() {
     </div>` : ''}
 
     <div class="section-title">
-      <span>Troškovi</span>
-      ${state.filterCat ? `<button type="button" class="filter-chip" id="clear-filter">${cat(state.filterCat).icon} ${esc(cat(state.filterCat).label)} <span class="x">✕</span></button>` : ''}
+      <span>${K.listTitle}</span>
+      ${state.filterCat ? `<button type="button" class="filter-chip" id="clear-filter">${cat(kind, state.filterCat).icon} ${esc(cat(kind, state.filterCat).label)} <span class="x">✕</span></button>` : ''}
     </div>
     ${groups.length ? groups.map((g) => `
-      <div class="group-header"><span>${dayLabel(g.date)}</span><span>${money(sum(g.rows))}</span></div>
-      <div class="group">${g.rows.map((r) => itemRow(r)).join('')}</div>`).join('')
-      : '<div class="group empty">Nema troškova u ovom mjesecu.</div>'}
+      <div class="group-header"><span>${dayLabel(g.date)}</span><span>${K.sign}${money(sum(g.rows))}</span></div>
+      <div class="group">${g.rows.map((r) => itemRow(kind, r)).join('')}</div>`).join('')
+      : `<div class="group empty">${K.empty}</div>`}
   `;
 
   $('#prev-m').addEventListener('click', () => { state.month = addMonths(state.month, -1); state.filterCat = null; render(); });
   $('#next-m').addEventListener('click', () => { state.month = addMonths(state.month, 1); state.filterCat = null; render(); });
   $('#clear-filter')?.addEventListener('click', () => { state.filterCat = null; render(); });
+  $$('#kind-switch button', v).forEach((b) => b.addEventListener('click', () => {
+    if (state.overviewKind === b.dataset.kind) return;
+    state.overviewKind = b.dataset.kind;
+    state.filterCat = null;
+    render();
+  }));
   $$('.cat-row', v).forEach((b) => b.addEventListener('click', () => {
     state.filterCat = state.filterCat === b.dataset.cat ? null : b.dataset.cat;
     render();
   }));
-  wireItems(v, cur);
+  wireItems(kind, v, cur);
 }
 
 // ---------- Račun ----------
@@ -496,8 +606,9 @@ function renderRacun() {
   });
 }
 
-// ---------- Uređivanje troška ----------
-function openEdit(r) {
+// ---------- Uređivanje zapisa ----------
+function openEdit(kind, r) {
+  const K = KINDS[kind];
   let picked = r.category;
   const sheet = $('#sheet');
   sheet.innerHTML = `
@@ -505,14 +616,14 @@ function openEdit(r) {
       <div class="grab"></div>
       <div class="bar-row">
         <button type="button" class="left" id="e-cancel">Odustani</button>
-        <h2>Uredi trošak</h2>
+        <h2>${K.editTitle}</h2>
         <button type="submit" class="right" form="edit-form">Spremi</button>
       </div>
     </div>
     <form id="edit-form" novalidate>
-      ${expenseFields({ amount: r.amount.toFixed(2).replace('.', ','), category: picked, note: r.note, date: r.spent_at })}
+      ${entryFields(kind, { amount: r.amount.toFixed(2).replace('.', ','), category: picked, note: r.note, date: r.date })}
       <div class="group">
-        <button type="button" class="row center destructive" id="e-del">Obriši trošak</button>
+        <button type="button" class="row center destructive" id="e-del">${K.deleteLabel}</button>
       </div>
     </form>`;
   $('#sheet-backdrop').hidden = false;
@@ -526,9 +637,9 @@ function openEdit(r) {
   $('#e-cancel').addEventListener('click', closeSheet);
 
   $('#e-del').addEventListener('click', async () => {
-    if (!confirm(`Obrisati ${money(r.amount)} · ${cat(r.category).label}?`)) return;
+    if (!confirm(`Obrisati ${K.sign}${money(r.amount)} · ${cat(kind, r.category).label}?`)) return;
     try {
-      await db.deleteExpense(r.id);
+      await db.remove(kind, r.id);
       closeSheet();
       toast('Obrisano');
       render();
@@ -540,11 +651,11 @@ function openEdit(r) {
     const amount = parseAmount($('.amount', form).value);
     if (!(amount > 0)) return toast('Upiši ispravan iznos', true);
     try {
-      await db.updateExpense(r.id, {
+      await db.update(kind, r.id, {
         amount,
         category: picked,
         note: $('.note', form).value.trim() || null,
-        spent_at: $('.date', form).value || r.spent_at,
+        date: $('.date', form).value || r.date,
       });
       closeSheet();
       toast('Promjene spremljene');
