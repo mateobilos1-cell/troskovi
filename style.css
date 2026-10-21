@@ -116,6 +116,53 @@ button.row:active, button.row.pressed { background: var(--fill); }
 }
 .pill-date::-webkit-date-and-time-value { text-align: right; }
 .pill-date::-webkit-calendar-picker-indicator { display: none; }
+.pill-select {
+  flex: none; max-width: 62%; min-width: 0;
+  -webkit-appearance: none; appearance: none;
+  border: 0; outline: none; border-radius: 9px; padding: 6px 11px;
+  background: var(--fill); color: var(--tint); font-size: 17px; text-align: right; text-align-last: right;
+  text-overflow: ellipsis;
+}
+.value.tinted { color: var(--tint); }
+
+/* iOS prekidač */
+.switch {
+  -webkit-appearance: none; appearance: none; flex: none; margin: 0; cursor: pointer;
+  width: 51px; height: 31px; border-radius: 999px; background: var(--fill2); position: relative;
+  transition: background-color .25s;
+}
+.switch::before {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%;
+  background: #fff; box-shadow: 0 3px 8px rgba(0, 0, 0, .15), 0 3px 1px rgba(0, 0, 0, .06);
+  transition: transform .25s cubic-bezier(.3, .7, .4, 1.2);
+}
+.switch:checked { background: var(--green); }
+.switch:checked::before { transform: translateX(20px); }
+.switch:disabled { opacity: .5; }
+
+/* Oznaka računa (ZABA, PBZ...) */
+.acc-badge {
+  width: 32px; height: 32px; flex: none; border-radius: 9px; display: grid; place-items: center;
+  background: var(--c); color: #fff; font-family: var(--rounded); font-weight: 700; font-size: 14px; letter-spacing: 0;
+  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, .18);
+}
+.acc-badge.long { font-size: 10px; }
+.acc-badge.big { width: 48px; height: 48px; border-radius: 14px; font-size: 19px; }
+.acc-badge.big.long { font-size: 13px; }
+.acc-item, .add-acc { --sep-left: 60px; }
+.plus-ico {
+  width: 32px; height: 32px; flex: none; border-radius: 9px; display: grid; place-items: center;
+  background: var(--fill); color: var(--tint); font-size: 22px; font-weight: 500;
+}
+.presets .cat.on .acc-badge { box-shadow: 0 0 0 2.5px var(--card), 0 0 0 4.5px var(--c); }
+.presets .cat.on .lbl { color: var(--text); font-weight: 600; }
+.colors { flex-wrap: wrap; gap: 10px; padding-top: 12px; padding-bottom: 12px; }
+.color-dot {
+  width: 28px; height: 28px; border-radius: 50%; border: 0; padding: 0; background: var(--c);
+  box-shadow: inset 0 0 0 0.5px rgba(127, 127, 127, .4);
+}
+.color-dot.on { box-shadow: 0 0 0 2.5px var(--card), 0 0 0 4.5px var(--c); }
+.chips { display: inline-flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
 
 /* ---------- Gumbi ---------- */
 .btn-filled {
@@ -296,12 +343,12 @@ button.row:active, button.row.pressed { background: var(--fill); }
 .chart .axis { display: flex; justify-content: space-between; font-size: 11px; color: var(--text2); margin-top: 5px; letter-spacing: 0; }
 
 .cat-row { --sep-left: 60px; align-items: flex-start; padding-top: 11px; padding-bottom: 11px; }
-.cat-row .main { flex: 1; min-width: 0; }
+.cat-row .main { flex: 1; min-width: 0; display: block; }
 .cat-row .top { display: flex; justify-content: space-between; gap: 8px; }
 .cat-row .p { color: var(--text2); margin-left: 6px; font-size: 15px; }
 .cat-row.on { background: color-mix(in srgb, var(--c) 10%, var(--card)); }
 .cat-row .ico-sq { margin-top: 1px; }
-.bar { height: 6px; border-radius: 3px; background: var(--fill); margin-top: 8px; overflow: hidden; }
+.bar { display: block; height: 6px; border-radius: 3px; background: var(--fill); margin-top: 8px; overflow: hidden; }
 .bar i { display: block; height: 100%; border-radius: 3px; background: var(--c); }
 
 .filter-chip {

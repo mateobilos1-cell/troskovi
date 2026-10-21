@@ -13,12 +13,23 @@ if (!isDemo) {
 }
 
 const appUrl = () => location.origin + location.pathname;
-const toUser = (u) => (u ? { id: u.id, email: u.email } : null);
+
+// Postavke korisnika žive u user_metadata (nije potrebna posebna tablica)
+const toSettings = (meta = {}) => ({
+  trackAccounts: !!meta.track_accounts,
+  defaultAccount: meta.default_account || null,
+});
+const toUser = (u) => (u ? { id: u.id, email: u.email, settings: toSettings(u.user_metadata) } : null);
 
 function check({ data, error }) {
   if (error) throw error;
   return data;
 }
+
+// Stupac account_id čita/piše se samo kad je praćenje računa uključeno,
+// pa aplikacija radi i ako accounts.sql još nije pokrenut.
+let withAccounts = false;
+export function useAccounts(on) { withAccounts = !!on; }
 
 // ---------- Prijava ----------
 
@@ -60,6 +71,40 @@ export async function updatePassword(password) {
   check(await sb.auth.updateUser({ password }));
 }
 
+/** Sprema postavke ({ trackAccounts, defaultAccount }) i vraća nove. */
+export async function saveSettings(patch) {
+  const meta = {};
+  if ('trackAccounts' in patch) meta.track_accounts = patch.trackAccounts;
+  if ('defaultAccount' in patch) meta.default_account = patch.defaultAccount;
+  if (isDemo) return demo.saveSettings(meta);
+  const data = check(await sb.auth.updateUser({ data: meta }));
+  return toSettings(data.user.user_metadata);
+}
+
+// ---------- Računi (ZABA, Revolut, gotovina...) ----------
+
+const ACC_COLS = 'id, name, short, color, created_at';
+
+export async function listAccounts() {
+  if (isDemo) return demo.accounts();
+  return check(await sb.from('accounts').select(ACC_COLS).order('created_at'));
+}
+
+export async function addAccount(a) {
+  if (isDemo) return demo.addAccount(a);
+  return check(await sb.from('accounts').insert(a).select(ACC_COLS).single());
+}
+
+export async function updateAccount(id, a) {
+  if (isDemo) return demo.updateAccount(id, a);
+  check(await sb.from('accounts').update(a).eq('id', id));
+}
+
+export async function removeAccount(id) {
+  if (isDemo) return demo.removeAccount(id);
+  check(await sb.from('accounts').delete().eq('id', id));
+}
+
 // ---------- Troškovi i prihodi ----------
 // kind je 'expense' (tablica expenses) ili 'income' (tablica incomes).
 // Aplikacija uvijek radi s poljem `date`; ovdje se prevodi u stupac pojedine tablice.
@@ -70,14 +115,18 @@ const TABLES = {
 };
 
 function fromRow(r, dateCol) {
-  return { id: r.id, amount: Number(r.amount), category: r.category, note: r.note, date: r[dateCol], created_at: r.created_at };
+  return {
+    id: r.id, amount: Number(r.amount), category: r.category, note: r.note,
+    date: r[dateCol], account_id: r.account_id ?? null, created_at: r.created_at,
+  };
 }
 function toRow(e, dateCol) {
   const row = { amount: e.amount, category: e.category, note: e.note };
   if (e.date) row[dateCol] = e.date;
+  if (withAccounts && 'account_id' in e) row.account_id = e.account_id;
   return row;
 }
-const cols = (dateCol) => `id, amount, category, note, ${dateCol}, created_at`;
+const cols = (dateCol) => `id, amount, category, note, ${dateCol}, created_at${withAccounts ? ', account_id' : ''}`;
 
 /** Zapisi s datumom u rasponu [from, to), najnoviji prvi. Datumi su 'YYYY-MM-DD'. */
 export async function list(kind, from, to) {
@@ -126,12 +175,14 @@ const demo = (() => {
     if (mem) return mem;
     try { mem = JSON.parse(localStorage.getItem(KEY)); } catch { /* nedostupno */ }
     mem ||= { user: null, items: [] };
+    mem.accounts ||= [];
     // stari demo format (samo troškovi)
     if (mem.rows) {
       mem.items = mem.rows.map(({ spent_at, ...r }) => ({ ...r, kind: 'expense', date: spent_at }));
       delete mem.rows;
     }
     if (mem.user && !mem.items.some((r) => r.kind === 'income')) mem.items.push(...seedIncomes());
+    if (mem.user) mem.user.settings ||= toSettings();
     return mem;
   };
   const save = () => {
@@ -142,7 +193,7 @@ const demo = (() => {
   const p = (x) => String(x).padStart(2, '0');
   const iso = (d) => `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
   const byNewest = (a, b) => b.date.localeCompare(a.date) || b.created_at.localeCompare(a.created_at);
-  const ofKind = (kind) => load().items.filter((r) => r.kind === kind);
+  const ofKind = (kind) => load().items.filter((r) => r.kind === kind).map((r) => ({ account_id: null, ...r }));
 
   function seedExpenses() {
     const cats = [
@@ -186,15 +237,36 @@ const demo = (() => {
     listen: (cb) => listeners.push(cb),
     signIn(email) {
       load();
-      mem.user = { id: 'demo', email: email || 'demo@primjer.hr' };
+      mem.user = { id: 'demo', email: email || 'demo@primjer.hr', settings: toSettings() };
       if (!mem.items.length) mem.items = [...seedExpenses(), ...seedIncomes()];
       save(); emit('SIGNED_IN');
     },
     signOut() { load(); mem.user = null; save(); emit('SIGNED_OUT'); },
+    saveSettings(meta) {
+      load();
+      const s = mem.user.settings;
+      if ('track_accounts' in meta) s.trackAccounts = meta.track_accounts;
+      if ('default_account' in meta) s.defaultAccount = meta.default_account;
+      save();
+      return { ...s };
+    },
+    accounts: () => [...load().accounts],
+    addAccount(a) {
+      const row = { id: uid(), short: null, created_at: new Date().toISOString(), ...a };
+      load().accounts.push(row); save();
+      return row;
+    },
+    updateAccount(id, a) { const r = load().accounts.find((x) => x.id === id); if (r) Object.assign(r, a); save(); },
+    removeAccount(id) {
+      load();
+      mem.accounts = mem.accounts.filter((x) => x.id !== id);
+      mem.items.forEach((r) => { if (r.account_id === id) r.account_id = null; });
+      save();
+    },
     list: (kind, from, to) => ofKind(kind).filter((r) => r.date >= from && r.date < to).sort(byNewest),
     recent: (kind, limit) => ofKind(kind).sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, limit),
     add(kind, e) {
-      const row = { id: uid(), kind, note: null, created_at: new Date().toISOString(), ...e };
+      const row = { id: uid(), kind, note: null, account_id: null, created_at: new Date().toISOString(), ...e };
       load().items.push(row); save();
       return row;
     },

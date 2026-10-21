@@ -54,7 +54,26 @@ const KINDS = {
     moreIsGood: true,
   },
 };
-const CAT_INDEX = Object.fromEntries(Object.entries(KINDS).map(([k, v]) => [k, Object.fromEntries(v.cats.map((c) => [c.id, c]))]));
+// Brzi odabir kod dodavanja računa (boje i kratice su samo za prepoznavanje)
+const ACCOUNT_PRESETS = [
+  { name: 'Zagrebačka banka', short: 'ZABA', color: '#E30613' },
+  { name: 'PBZ', short: 'PBZ', color: '#0057A8' },
+  { name: 'Erste', short: 'ERS', color: '#2870ED' },
+  { name: 'OTP banka', short: 'OTP', color: '#52AE30' },
+  { name: 'Raiffeisen', short: 'RBA', color: '#C9A400' },
+  { name: 'Addiko', short: 'ADK', color: '#00A3E0' },
+  { name: 'HPB', short: 'HPB', color: '#0F4C81' },
+  { name: 'Revolut', short: 'R', color: '#1C1C1E' },
+  { name: 'Aircash', short: 'AC', color: '#00A99D' },
+  { name: 'KEKS Pay', short: 'K', color: '#FF6B00' },
+  { name: 'Gotovina', short: '💵', color: '#34C759' },
+  { name: 'Kreditna kartica', short: '💳', color: '#5856D6' },
+];
+const ACCOUNT_COLORS = ['#FF3B30', '#FF9500', '#C9A400', '#34C759', '#00A99D', '#007AFF', '#0F4C81', '#5856D6', '#AF52DE', '#FF2D55', '#8E8E93', '#1C1C1E'];
+const initials = (name) => name.trim().split(/\s+/).map((w) => w[0]).join('').slice(0, 3).toUpperCase() || '?';
+const accBadge = (a, cls = '') => `<span class="acc-badge ${cls} ${[...(a.short || '')].length > 2 ? 'long' : ''}" style="--c:${a.color}">${esc(a.short || initials(a.name))}</span>`;
+
+const CAT_INDEX =Object.fromEntries(Object.entries(KINDS).map(([k, v]) => [k, Object.fromEntries(v.cats.map((c) => [c.id, c]))]));
 const cat = (kind, id) => CAT_INDEX[kind][id] || CAT_INDEX[kind].ostalo;
 
 const MONTHS = ['siječanj', 'veljača', 'ožujak', 'travanj', 'svibanj', 'lipanj',
@@ -115,6 +134,7 @@ function errorText(e) {
   if (code === 'weak_password' || /password should be/i.test(msg)) return 'Lozinka mora imati barem 6 znakova.';
   if (/rate limit|too many/i.test(msg)) return 'Previše pokušaja. Pričekaj malo pa pokušaj ponovno.';
   if (/failed to fetch|network/i.test(msg)) return 'Nema veze s internetom.';
+  if (isMissingTable(e) && /accounts|account_id/.test(msg)) return 'Tablica za račune još ne postoji — pokreni supabase/accounts.sql u Supabaseu.';
   if (isMissingTable(e)) return 'Tablica za prihode još ne postoji — pokreni supabase/incomes.sql u Supabaseu.';
   return msg || 'Nešto je pošlo po zlu.';
 }
@@ -142,8 +162,27 @@ const state = {
   month: monthStart(new Date()),
   overviewKind: 'expense',
   filterCat: null,
+  filterAcc: null, // id računa ili 'none'
   pick: { expense: null, income: null },
+  accounts: [],
 };
+
+const tracking = () => !!state.user?.settings?.trackAccounts;
+const accById = (id) => state.accounts.find((a) => a.id === id) || null;
+
+// Učitava račune ako je praćenje uključeno. Ako tablica još ne postoji, praćenje se privremeno gasi.
+async function loadAccounts() {
+  db.useAccounts(tracking());
+  state.accounts = [];
+  if (!tracking()) return;
+  try {
+    state.accounts = await db.listAccounts();
+  } catch (e) {
+    db.useAccounts(false);
+    state.user.settings = { ...state.user.settings, trackAccounts: false };
+    toast(errorText(e), true);
+  }
+}
 
 // ---------- Pokretanje ----------
 boot();
@@ -170,7 +209,7 @@ function setUser(user) {
   state.user = user;
   if (same && state.started) return;
   state.started = true;
-  if (user) { $('#auth').hidden = true; $('#app').hidden = false; go('trosak'); }
+  if (user) { $('#auth').hidden = true; $('#app').hidden = false; loadAccounts().then(() => go('trosak')); }
   else { closeSheet(); $('#app').hidden = true; showAuth('login'); }
 }
 
@@ -274,7 +313,7 @@ function showRecovery() {
 }
 
 // ---------- Navigacija ----------
-const TITLES = { trosak: 'Novi trošak', prihod: 'Novi prihod', pregled: 'Pregled', racun: 'Račun' };
+const TITLES = { trosak: 'Novi trošak', prihod: 'Novi prihod', pregled: 'Pregled', postavke: 'Postavke' };
 
 function go(view) {
   state.view = view;
@@ -292,7 +331,7 @@ async function render() {
     if (view === 'trosak') await renderEntry('expense');
     else if (view === 'prihod') await renderEntry('income');
     else if (view === 'pregled') await renderPregled();
-    else renderRacun();
+    else renderPostavke();
   } catch (e) {
     toast(errorText(e), true);
   }
@@ -314,7 +353,17 @@ function wireCats(root, onPick) {
 }
 
 // Iznos, kategorije, bilješka i datum — isto za unos i uređivanje
-function entryFields(kind, { amount = '', category = null, note = '', date = today() } = {}) {
+function entryFields(kind, { amount = '', category = null, note = '', date = today(), account = null } = {}) {
+  let accountRow = '';
+  if (tracking()) {
+    accountRow = state.accounts.length
+      ? `<label class="row"><span class="label">Račun</span>
+          <select class="pill-select account" aria-label="Račun">
+            <option value="">Bez računa</option>
+            ${state.accounts.map((a) => `<option value="${a.id}" ${a.id === account ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}
+          </select></label>`
+      : `<button type="button" class="row go-accounts"><span class="label">Račun</span><span class="value tinted">Dodaj u postavkama</span><span class="chev"></span></button>`;
+  }
   return `
     <div class="group amount-group">
       <label class="amount-line">
@@ -327,12 +376,31 @@ function entryFields(kind, { amount = '', category = null, note = '', date = tod
     <div class="group">
       <label class="row"><input class="row-input note" placeholder="Bilješka (neobavezno)" maxlength="100" value="${esc(note)}" autocomplete="off"></label>
       <label class="row"><span class="label">Datum</span><input class="pill-date date" type="date" value="${date}" max="${today()}" aria-label="Datum"></label>
+      ${accountRow}
     </div>`;
+}
+
+// Polja forme u objekt za spremanje (account_id samo kad je praćenje računa uključeno)
+function readFields(form) {
+  const e = {
+    amount: parseAmount($('.amount', form).value),
+    note: $('.note', form).value.trim() || null,
+    date: $('.date', form).value || today(),
+  };
+  const sel = $('.account', form);
+  if (tracking() && sel) e.account_id = sel.value || null;
+  return e;
+}
+
+function wireFields(form) {
+  wireAmount($('.amount', form));
+  $('.go-accounts', form)?.addEventListener('click', () => { closeSheet(); go('postavke'); });
 }
 
 function itemRow(kind, r, showDate = false) {
   const c = cat(kind, r.category);
-  const sub = [showDate ? dayLabel(r.date) : null, r.note ? esc(r.note) : null].filter(Boolean).join(' · ');
+  const acc = tracking() ? accById(r.account_id) : null;
+  const sub = [showDate ? dayLabel(r.date) : null, acc ? esc(acc.name) : null, r.note ? esc(r.note) : null].filter(Boolean).join(' · ');
   return `
     <button class="row item" data-id="${r.id}" style="--c:${c.color}">
       <span class="ico-sq">${c.icon}</span>
@@ -356,31 +424,27 @@ async function renderEntry(kind) {
   // Forma se prikaže odmah; brojke i zadnji unosi stignu kad se učitaju.
   v.innerHTML = `
     <form id="add-form" novalidate>
-      ${entryFields(kind, { category: state.pick[kind] })}
+      ${entryFields(kind, { category: state.pick[kind], account: accById(state.user.settings.defaultAccount)?.id })}
       <button class="btn-filled ${kind === 'income' ? 'green' : ''}" type="submit">Spremi</button>
     </form>
     <div id="entry-extra"></div>`;
 
   const form = $('#add-form');
   const amountEl = $('.amount', form);
-  wireAmount(amountEl);
+  wireFields(form);
   wireCats(form, (id) => { state.pick[kind] = id; });
 
   form.addEventListener('submit', async (ev) => {
     ev.preventDefault();
-    const amount = parseAmount(amountEl.value);
+    const fields = readFields(form);
+    const { amount } = fields;
     if (!(amount > 0)) { amountEl.focus(); return toast('Upiši iznos', true); }
     const category = state.pick[kind];
     if (!category) return toast('Odaberi kategoriju', true);
     const btn = $('button[type=submit]', form);
     btn.disabled = true;
     try {
-      await db.add(kind, {
-        amount,
-        category,
-        note: $('.note', form).value.trim() || null,
-        date: $('.date', form).value || today(),
-      });
+      await db.add(kind, { ...fields, category });
       toast(`${cat(kind, category).icon}  ${KINDS[kind].sign}${money(amount)} spremljeno`);
       state.pick[kind] = null;
       window.scrollTo(0, 0);
@@ -497,7 +561,20 @@ async function renderPregled() {
       fill="${isToday ? K.color : `color-mix(in srgb, ${K.color} 45%, var(--card))`}"><title>${i + 1}. — ${money(val)}</title></rect>`;
   }).join('');
 
-  const shown = state.filterCat ? cur.filter((r) => r.category === state.filterCat) : cur;
+  // Po računima (samo kad je praćenje uključeno)
+  const accKey = (r) => (accById(r.account_id) ? r.account_id : 'none');
+  const accLabel = (key) => (key === 'none' ? { name: 'Bez računa', short: '–', color: '#8E8E93' } : accById(key));
+  let accList = [];
+  if (tracking() && state.accounts.length) {
+    const byAcc = {};
+    cur.forEach((r) => { byAcc[accKey(r)] = (byAcc[accKey(r)] || 0) + r.amount; });
+    accList = Object.entries(byAcc).sort((a, b) => b[1] - a[1]);
+  }
+  const maxAcc = accList[0]?.[1] || 1;
+  if (!tracking()) state.filterAcc = null;
+
+  const shown = cur.filter((r) => (!state.filterCat || r.category === state.filterCat)
+    && (!state.filterAcc || accKey(r) === state.filterAcc));
   const groups = [];
   shown.forEach((r) => {
     const g = groups[groups.length - 1];
@@ -555,9 +632,28 @@ async function renderPregled() {
       }).join('')}
     </div>` : ''}
 
+    ${accList.length ? `
+    <div class="section-title"><span>Po računima</span></div>
+    <div class="group">
+      ${accList.map(([key, val]) => {
+        const a = accLabel(key);
+        return `
+        <button type="button" class="row cat-row acc-row ${state.filterAcc === key ? 'on' : ''}" data-acc="${key}" style="--c:${a.color}">
+          ${accBadge(a)}
+          <span class="main">
+            <span class="top"><span>${esc(a.name)}<span class="p">${Math.round((val / total) * 100)}%</span></span><span>${money(val)}</span></span>
+            <span class="bar"><i style="width:${(val / maxAcc) * 100}%"></i></span>
+          </span>
+        </button>`;
+      }).join('')}
+    </div>` : ''}
+
     <div class="section-title">
       <span>${K.listTitle}</span>
-      ${state.filterCat ? `<button type="button" class="filter-chip" id="clear-filter">${cat(kind, state.filterCat).icon} ${esc(cat(kind, state.filterCat).label)} <span class="x">✕</span></button>` : ''}
+      <span class="chips">
+        ${state.filterCat ? `<button type="button" class="filter-chip" id="clear-cat">${cat(kind, state.filterCat).icon} ${esc(cat(kind, state.filterCat).label)} <span class="x">✕</span></button>` : ''}
+        ${state.filterAcc ? `<button type="button" class="filter-chip" id="clear-acc">${esc(accLabel(state.filterAcc)?.name)} <span class="x">✕</span></button>` : ''}
+      </span>
     </div>
     ${groups.length ? groups.map((g) => `
       <div class="group-header"><span>${dayLabel(g.date)}</span><span>${K.sign}${money(sum(g.rows))}</span></div>
@@ -565,26 +661,53 @@ async function renderPregled() {
       : `<div class="group empty">${K.empty}</div>`}
   `;
 
-  $('#prev-m').addEventListener('click', () => { state.month = addMonths(state.month, -1); state.filterCat = null; render(); });
-  $('#next-m').addEventListener('click', () => { state.month = addMonths(state.month, 1); state.filterCat = null; render(); });
-  $('#clear-filter')?.addEventListener('click', () => { state.filterCat = null; render(); });
+  const resetFilters = () => { state.filterCat = null; state.filterAcc = null; };
+  $('#prev-m').addEventListener('click', () => { state.month = addMonths(state.month, -1); resetFilters(); render(); });
+  $('#next-m').addEventListener('click', () => { state.month = addMonths(state.month, 1); resetFilters(); render(); });
+  $('#clear-cat')?.addEventListener('click', () => { state.filterCat = null; render(); });
+  $('#clear-acc')?.addEventListener('click', () => { state.filterAcc = null; render(); });
   $$('#kind-switch button', v).forEach((b) => b.addEventListener('click', () => {
     if (state.overviewKind === b.dataset.kind) return;
     state.overviewKind = b.dataset.kind;
-    state.filterCat = null;
+    resetFilters();
     render();
   }));
-  $$('.cat-row', v).forEach((b) => b.addEventListener('click', () => {
+  $$('.cat-row[data-cat]', v).forEach((b) => b.addEventListener('click', () => {
     state.filterCat = state.filterCat === b.dataset.cat ? null : b.dataset.cat;
+    render();
+  }));
+  $$('.acc-row', v).forEach((b) => b.addEventListener('click', () => {
+    state.filterAcc = state.filterAcc === b.dataset.acc ? null : b.dataset.acc;
     render();
   }));
   wireItems(kind, v, cur);
 }
 
-// ---------- Račun ----------
-function renderRacun() {
+// ---------- Postavke ----------
+function renderPostavke() {
   const v = $('#view');
+  const def = state.user.settings.defaultAccount;
   v.innerHTML = `
+    <div class="group-header"><span>Računi i kartice</span></div>
+    <div class="group">
+      <label class="row"><span class="label">Prati račune</span>
+        <input type="checkbox" class="switch" id="track-toggle" ${tracking() ? 'checked' : ''}></label>
+    </div>
+    <div class="group-footer">Uz svaki trošak i prihod možeš odabrati račun ili karticu — npr. ZABA, PBZ, Revolut ili gotovinu — i u Pregledu vidjeti koliko ide s kojeg.</div>
+
+    ${tracking() ? `
+    <div class="group">
+      ${state.accounts.map((a) => `
+        <button type="button" class="row acc-item" data-id="${a.id}">
+          ${accBadge(a)}
+          <span class="label">${esc(a.name)}</span>
+          ${a.id === def ? '<span class="value">Zadani</span>' : ''}
+          <span class="chev"></span>
+        </button>`).join('')}
+      <button type="button" class="row tinted add-acc" id="add-acc"><span class="plus-ico">+</span><span class="label">Dodaj račun</span></button>
+    </div>` : ''}
+
+    <div class="group-header"><span>Korisnik</span></div>
     <div class="group">
       <div class="row"><span class="label">E-mail</span><span class="value">${esc(state.user?.email)}</span></div>
     </div>
@@ -604,6 +727,120 @@ function renderRacun() {
   $('#logout').addEventListener('click', async () => {
     try { await db.signOut(); } catch (e) { toast(errorText(e), true); }
   });
+
+  const toggle = $('#track-toggle');
+  toggle.addEventListener('change', async () => {
+    const on = toggle.checked;
+    toggle.disabled = true;
+    try {
+      if (on) {
+        db.useAccounts(true);
+        state.accounts = await db.listAccounts(); // ujedno provjera da postoji tablica
+      }
+      state.user.settings = await db.saveSettings({ trackAccounts: on });
+      await loadAccounts();
+      if (!on) state.filterAcc = null;
+    } catch (e) {
+      db.useAccounts(tracking());
+      toast(errorText(e), true);
+    }
+    renderPostavke();
+  });
+
+  $('#add-acc')?.addEventListener('click', () => openAccount(null));
+  $$('.acc-item', v).forEach((b) => b.addEventListener('click', () => openAccount(accById(b.dataset.id))));
+}
+
+// Dodavanje (a = null) ili uređivanje računa
+function openAccount(a) {
+  const isNew = !a;
+  let color = a?.color || ACCOUNT_COLORS[5];
+  let preset = null;
+  const isDefault = !isNew && state.user.settings.defaultAccount === a.id;
+  const sheet = $('#sheet');
+  sheet.innerHTML = `
+    <div class="sheet-bar">
+      <div class="grab"></div>
+      <div class="bar-row">
+        <button type="button" class="left" id="a-cancel">Odustani</button>
+        <h2>${isNew ? 'Novi račun' : 'Uredi račun'}</h2>
+        <button type="submit" class="right" form="acc-form">${isNew ? 'Dodaj' : 'Spremi'}</button>
+      </div>
+    </div>
+    <form id="acc-form" novalidate>
+      ${isNew ? `
+      <div class="group-header"><span>Brzi odabir</span></div>
+      <div class="group"><div class="cats presets">
+        ${ACCOUNT_PRESETS.map((p, i) => `
+          <button type="button" class="cat preset" data-i="${i}" style="--c:${p.color}">
+            ${accBadge(p, 'big')}<span class="lbl">${esc(p.name)}</span>
+          </button>`).join('')}
+      </div></div>` : ''}
+      <div class="group">
+        <label class="row"><span id="a-preview">${accBadge({ name: a?.name || '?', short: a?.short, color })}</span>
+          <input class="row-input" id="a-name" placeholder="Naziv (npr. ZABA tekući)" maxlength="40" value="${esc(a?.name)}" autocomplete="off"></label>
+        <div class="row colors">
+          ${ACCOUNT_COLORS.map((c) => `<button type="button" class="color-dot ${c === color ? 'on' : ''}" data-c="${c}" style="--c:${c}" aria-label="Boja"></button>`).join('')}
+        </div>
+      </div>
+      <div class="group">
+        <label class="row"><span class="label">Zadani račun</span><input type="checkbox" class="switch" id="a-default" ${isDefault ? 'checked' : ''}></label>
+      </div>
+      <div class="group-footer">Zadani račun je unaprijed odabran kod svakog novog unosa.</div>
+      ${isNew ? '' : `<div class="group"><button type="button" class="row center destructive" id="a-del">Obriši račun</button></div>`}
+    </form>`;
+  $('#sheet-backdrop').hidden = false;
+  sheet.hidden = false;
+  sheet.scrollTop = 0;
+  document.body.style.overflow = 'hidden';
+
+  const form = $('#acc-form');
+  const nameEl = $('#a-name');
+  const shortFor = () => (preset && preset.name === nameEl.value.trim() ? preset.short
+    : (!isNew && a.name === nameEl.value.trim() ? a.short : initials(nameEl.value)));
+  const refresh = () => {
+    $('#a-preview').innerHTML = accBadge({ name: nameEl.value || '?', short: shortFor(), color });
+    $$('.color-dot', form).forEach((d) => d.classList.toggle('on', d.dataset.c === color));
+  };
+  nameEl.addEventListener('input', refresh);
+  $$('.color-dot', form).forEach((d) => d.addEventListener('click', () => { color = d.dataset.c; refresh(); }));
+  $$('.preset', form).forEach((b) => b.addEventListener('click', () => {
+    preset = ACCOUNT_PRESETS[Number(b.dataset.i)];
+    $$('.preset', form).forEach((x) => x.classList.toggle('on', x === b));
+    nameEl.value = preset.name;
+    color = preset.color;
+    refresh();
+  }));
+  $('#a-cancel').addEventListener('click', closeSheet);
+
+  $('#a-del')?.addEventListener('click', async () => {
+    if (!confirm(`Obrisati račun „${a.name}"? Troškovi i prihodi ostaju, samo bez oznake računa.`)) return;
+    try {
+      await db.removeAccount(a.id);
+      if (isDefault) state.user.settings = await db.saveSettings({ defaultAccount: null });
+      await loadAccounts();
+      closeSheet();
+      toast('Račun obrisan');
+      render();
+    } catch (e) { toast(errorText(e), true); }
+  });
+
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const name = nameEl.value.trim();
+    if (!name) { nameEl.focus(); return toast('Upiši naziv računa', true); }
+    if (isNew && state.accounts.some((x) => x.name.toLowerCase() === name.toLowerCase())) return toast('Račun s tim nazivom već postoji', true);
+    const data = { name, short: shortFor(), color };
+    try {
+      const id = isNew ? (await db.addAccount(data)).id : (await db.updateAccount(a.id, data), a.id);
+      const wantDefault = $('#a-default').checked;
+      if (wantDefault !== isDefault) state.user.settings = await db.saveSettings({ defaultAccount: wantDefault ? id : null });
+      await loadAccounts();
+      closeSheet();
+      toast(isNew ? 'Račun dodan' : 'Promjene spremljene');
+      render();
+    } catch (e) { toast(errorText(e), true); }
+  });
 }
 
 // ---------- Uređivanje zapisa ----------
@@ -621,7 +858,7 @@ function openEdit(kind, r) {
       </div>
     </div>
     <form id="edit-form" novalidate>
-      ${entryFields(kind, { amount: r.amount.toFixed(2).replace('.', ','), category: picked, note: r.note, date: r.date })}
+      ${entryFields(kind, { amount: r.amount.toFixed(2).replace('.', ','), category: picked, note: r.note, date: r.date, account: r.account_id })}
       <div class="group">
         <button type="button" class="row center destructive" id="e-del">${K.deleteLabel}</button>
       </div>
@@ -632,7 +869,7 @@ function openEdit(kind, r) {
   document.body.style.overflow = 'hidden';
 
   const form = $('#edit-form');
-  wireAmount($('.amount', form));
+  wireFields(form);
   wireCats(form, (id) => { picked = id; });
   $('#e-cancel').addEventListener('click', closeSheet);
 
@@ -648,15 +885,10 @@ function openEdit(kind, r) {
 
   form.addEventListener('submit', async (ev) => {
     ev.preventDefault();
-    const amount = parseAmount($('.amount', form).value);
-    if (!(amount > 0)) return toast('Upiši ispravan iznos', true);
+    const fields = readFields(form);
+    if (!(fields.amount > 0)) return toast('Upiši ispravan iznos', true);
     try {
-      await db.update(kind, r.id, {
-        amount,
-        category: picked,
-        note: $('.note', form).value.trim() || null,
-        date: $('.date', form).value || r.date,
-      });
+      await db.update(kind, r.id, { ...fields, category: picked });
       closeSheet();
       toast('Promjene spremljene');
       render();
