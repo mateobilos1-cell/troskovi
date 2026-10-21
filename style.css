@@ -348,6 +348,37 @@ button.row:active, button.row.pressed { background: var(--fill); }
 .cat-row .p { color: var(--text2); margin-left: 6px; font-size: 15px; }
 .cat-row.on { background: color-mix(in srgb, var(--c) 10%, var(--card)); }
 
+/* Budžeti */
+.budgets { padding: 16px 16px 12px; }
+.budgets .k { font-size: 15px; font-weight: 600; color: var(--text2); letter-spacing: -.24px; margin-bottom: 4px; }
+.budgets .sub { color: var(--text2); font-size: 15px; letter-spacing: -.24px; }
+.b-line { padding: 10px 0 8px; }
+.b-line + .b-line { border-top: 0.5px solid var(--sep); }
+.b-top { display: flex; justify-content: space-between; gap: 8px; font-size: 16px; }
+.b-amt { color: var(--text2); font-size: 15px; letter-spacing: -.24px; white-space: nowrap; }
+.b-amt b { color: var(--text); font-weight: 600; }
+.bbar { position: relative; height: 8px; border-radius: 4px; background: var(--fill); margin: 8px 0 5px; }
+.bbar i { display: block; height: 100%; border-radius: 4px; background: var(--green); transition: width .5s; }
+.bbar.warn i { background: #ff9500; }
+.bbar.over i { background: var(--red); }
+.bbar em, .b-legend em {
+  position: absolute; top: -3px; width: 2px; height: 14px; border-radius: 1px; background: var(--text); opacity: .55;
+  transform: translateX(-1px);
+}
+.b-note { font-size: 13px; color: var(--text2); letter-spacing: -.08px; }
+.b-legend { position: relative; font-size: 12px; color: var(--text2); padding: 6px 0 0 12px; letter-spacing: 0; }
+.b-legend em { top: 7px; left: 2px; height: 12px; }
+.budget-row { --sep-left: 60px; }
+.budget-pill {
+  display: inline-flex; align-items: center; gap: 4px; flex: none;
+  background: var(--fill); border-radius: 9px; padding: 6px 11px; color: var(--text2);
+}
+.budget-input {
+  width: 72px; border: 0; background: none; outline: none; padding: 0; text-align: right;
+  font-size: 17px; color: var(--tint); font-variant-numeric: tabular-nums;
+}
+.budget-input::placeholder { color: var(--text3); }
+
 /* Dnevnik: kalendar */
 #log-switch { margin: 0 0 12px; }
 .cal { padding: 12px 10px 10px; }
@@ -459,7 +490,7 @@ button.row:active, button.row.pressed { background: var(--fill); }
   background: var(--bar-glass); color: var(--text);
   -webkit-backdrop-filter: saturate(180%) blur(24px); backdrop-filter: saturate(180%) blur(24px);
   border: 0.5px solid var(--bar-border); box-shadow: var(--shadow);
-  padding: 11px 18px; border-radius: 999px;
+  padding: 11px 18px; border-radius: 22px;
   font-size: 15px; font-weight: 600; letter-spacing: -.24px; max-width: calc(100% - 32px); text-align: center;
   transition: opacity .25s, transform .3s cubic-bezier(.2, .9, .25, 1.2);
 }

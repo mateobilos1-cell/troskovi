@@ -140,8 +140,8 @@ function errorText(e) {
 }
 
 // Polje za iznos raste sa sadržajem pa je iznos uvijek centriran uz "€"
-function wireAmount(input) {
-  const fit = () => { input.style.width = `${Math.max((input.value || input.placeholder).length, 1) + 0.2}ch`; };
+function wireAmount(input, autoWidth = true) {
+  const fit = () => { if (autoWidth) input.style.width = `${Math.max((input.value || input.placeholder).length, 1) + 0.2}ch`; };
   input.addEventListener('input', () => {
     // dopušta samo brojeve i jedan decimalni zarez
     let s = input.value.replace('.', ',').replace(/[^\d,]/g, '');
@@ -170,6 +170,7 @@ const state = {
 };
 
 const tracking = () => !!state.user?.settings?.trackAccounts;
+const budgeting = () => !!state.user?.settings?.trackBudgets;
 const accById = (id) => state.accounts.find((a) => a.id === id) || null;
 
 // Učitava račune ako je praćenje uključeno. Ako tablica još ne postoji, praćenje se privremeno gasi.
@@ -448,7 +449,9 @@ async function renderEntry(kind) {
     btn.disabled = true;
     try {
       await db.add(kind, { ...fields, category });
-      toast(`${cat(kind, category).icon}  ${KINDS[kind].sign}${money(amount)} spremljeno`);
+      const saved = `${cat(kind, category).icon}  ${KINDS[kind].sign}${money(amount)} spremljeno`;
+      const hint = kind === 'expense' ? await budgetHint(category, fields.date).catch(() => null) : null;
+      toast(hint ? `${saved} · ${hint.text}` : saved, hint?.over);
       state.pick[kind] = null;
       window.scrollTo(0, 0);
       await renderEntry(kind);
@@ -487,6 +490,75 @@ async function renderEntry(kind) {
       ? `<div class="group">${recent.map((r) => itemRow(kind, r, true)).join('')}</div>`
       : `<div class="group empty">${kind === 'income' ? 'Još nema prihoda. Upiši plaću ili drugi prihod gore.' : 'Još nema unosa. Upiši prvi trošak gore.'}</div>`}`;
   wireItems(kind, $('#entry-extra'), recent);
+}
+
+// ---------- Budžeti ----------
+// Stanje budžeta za jedan iznos: koliko je potrošeno od limita i koliko smije dnevno do kraja mjeseca
+function budgetStatus(spent, limit, m, isCurrent) {
+  const pct = (spent / limit) * 100;
+  const daysLeft = isCurrent ? daysIn(m) - new Date().getDate() + 1 : 0;
+  return {
+    pct,
+    left: limit - spent,
+    perDay: daysLeft > 0 ? (limit - spent) / daysLeft : null,
+    level: pct > 100 ? 'over' : pct >= 80 ? 'warn' : 'ok',
+  };
+}
+
+function budgetCard(m, exp, isCurrent) {
+  if (!budgeting()) return '';
+  const { total, cats } = state.user.settings.budgets;
+  const catIds = Object.keys(cats).filter((id) => cats[id] > 0);
+  if (!total && !catIds.length) {
+    return `<div class="group budgets"><div class="k">Budžet</div>
+      <div class="sub">Budžeti su uključeni, ali još nisi postavio nijedan iznos. Postavi ih u <b>Postavkama</b>.</div></div>`;
+  }
+  // gdje bi "trebao" biti s obzirom na dan u mjesecu
+  const pace = isCurrent ? (new Date().getDate() / daysIn(m)) * 100 : null;
+
+  const line = (icon, label, spent, limit) => {
+    const s = budgetStatus(spent, limit, m, isCurrent);
+    let note;
+    if (s.left < 0) note = `<span class="neg">${money(-s.left)} preko budžeta</span>`;
+    else if (s.perDay != null) note = `ostalo ${money(s.left)} · ~${money(s.perDay)}/dan`;
+    else note = `ostalo ${money(s.left)}`;
+    return `
+      <div class="b-line">
+        <div class="b-top"><span>${icon} ${label}</span><span class="b-amt"><b>${money(spent)}</b> od ${money(limit)}</span></div>
+        <div class="bbar ${s.level}"><i style="width:${Math.min(s.pct, 100)}%"></i>${pace != null ? `<em style="left:${pace}%"></em>` : ''}</div>
+        <div class="b-note">${note}</div>
+      </div>`;
+  };
+
+  const spentBy = (id) => sum(exp.filter((r) => r.category === id));
+  const rows = catIds
+    .map((id) => ({ id, spent: spentBy(id), limit: cats[id] }))
+    .sort((a, b) => b.spent / b.limit - a.spent / a.limit);
+
+  return `
+    <div class="group budgets">
+      <div class="k">Budžet</div>
+      ${total ? line('📊', 'Ukupno', sum(exp), total) : ''}
+      ${rows.map((r) => line(cat('expense', r.id).icon, esc(cat('expense', r.id).label), r.spent, r.limit)).join('')}
+      ${pace != null ? '<div class="b-legend"><em></em>gdje bi trebao biti danas</div>' : ''}
+    </div>`;
+}
+
+// Kratka poruka nakon spremanja troška: koliko je ostalo u budžetu kategorije (ili ukupnom)
+async function budgetHint(category, date) {
+  if (!budgeting()) return null;
+  const m = monthStart(new Date());
+  if (date.slice(0, 7) !== isoDate(m).slice(0, 7)) return null; // samo za tekući mjesec
+  const { total, cats } = state.user.settings.budgets;
+  const limit = cats[category] || total;
+  if (!limit) return null;
+  const rows = await db.list('expense', isoDate(m), isoDate(addMonths(m, 1)));
+  const spent = sum(cats[category] ? rows.filter((r) => r.category === category) : rows);
+  const label = cats[category] ? cat('expense', category).label : 'Ukupni budžet';
+  const left = limit - spent;
+  return left >= 0
+    ? { text: `${label}: ostalo ${money(left)}`, over: false }
+    : { text: `${label}: ${money(-left)} preko budžeta!`, over: true };
 }
 
 // ---------- Prsten (donut) po kategorijama ----------
@@ -668,6 +740,8 @@ async function renderPregled() {
       </div>
       ${balanceBody}
     </div>
+
+    ${budgetCard(m, curOf(expRows), isCurrent)}
 
     <div class="segmented" id="kind-switch">
       <button type="button" data-kind="expense" class="${kind === 'expense' ? 'on' : ''}">Troškovi</button>
@@ -907,6 +981,23 @@ function renderPostavke() {
       <button type="button" class="row tinted add-acc" id="add-acc"><span class="plus-ico">+</span><span class="label">Dodaj račun</span></button>
     </div>` : ''}
 
+    <div class="group-header"><span>Budžeti</span></div>
+    <div class="group">
+      <label class="row"><span class="label">Prati budžete</span>
+        <input type="checkbox" class="switch" id="budget-toggle" ${budgeting() ? 'checked' : ''}></label>
+    </div>
+    <div class="group-footer">Postavi mjesečni limit za ukupne troškove i pojedine kategorije. Vrijedi svaki mjesec i kreće ispočetka prvog u mjesecu.</div>
+
+    ${budgeting() ? `
+    <div class="group budget-form">
+      ${budgetRow('total', '<span class="ico-sq" style="--c:var(--tint)">📊</span>', '<b>Ukupno mjesečno</b>')}
+    </div>
+    <div class="group-header"><span>Po kategorijama</span></div>
+    <div class="group budget-form">
+      ${EXPENSE_CATEGORIES.map((c) => budgetRow(c.id, `<span class="ico-sq" style="--c:${c.color}">${c.icon}</span>`, esc(c.label))).join('')}
+    </div>
+    <div class="group-footer">Ostavi prazno za kategorije koje ne želiš pratiti.</div>` : ''}
+
     <div class="group-header"><span>Korisnik</span></div>
     <div class="group">
       <div class="row"><span class="label">E-mail</span><span class="value">${esc(state.user?.email)}</span></div>
@@ -949,6 +1040,44 @@ function renderPostavke() {
 
   $('#add-acc')?.addEventListener('click', () => openAccount(null));
   $$('.acc-item', v).forEach((b) => b.addEventListener('click', () => openAccount(accById(b.dataset.id))));
+
+  const btoggle = $('#budget-toggle');
+  btoggle.addEventListener('change', async () => {
+    btoggle.disabled = true;
+    try {
+      state.user.settings = await db.saveSettings({ trackBudgets: btoggle.checked });
+    } catch (e) { toast(errorText(e), true); }
+    renderPostavke();
+  });
+
+  // Iznos se sprema kad korisnik završi s upisom (izađe iz polja)
+  $$('.budget-input', v).forEach((inp) => {
+    wireAmount(inp, false);
+    inp.addEventListener('change', async () => {
+      const budgets = { total: null, cats: {} };
+      $$('.budget-input', v).forEach((x) => {
+        const n = parseAmount(x.value);
+        if (!(n > 0)) return;
+        if (x.dataset.key === 'total') budgets.total = n;
+        else budgets.cats[x.dataset.key] = n;
+      });
+      try {
+        state.user.settings = await db.saveSettings({ budgets });
+        toast('Budžet spremljen');
+      } catch (e) { toast(errorText(e), true); }
+    });
+  });
+}
+
+function budgetRow(key, icon, label) {
+  const b = state.user.settings.budgets;
+  const val = key === 'total' ? b.total : b.cats[key];
+  return `
+    <label class="row budget-row">
+      ${icon}<span class="label">${label}</span>
+      <span class="budget-pill"><input class="budget-input" data-key="${key}" inputmode="decimal" enterkeyhint="done"
+        placeholder="—" value="${val ? String(val).replace('.', ',') : ''}" autocomplete="off" aria-label="Budžet"><span>€</span></span>
+    </label>`;
 }
 
 // Dodavanje (a = null) ili uređivanje računa

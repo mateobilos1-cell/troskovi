@@ -15,9 +15,18 @@ if (!isDemo) {
 const appUrl = () => location.origin + location.pathname;
 
 // Postavke korisnika žive u user_metadata (nije potrebna posebna tablica)
+// Naziv u aplikaciji → naziv u user_metadata
+const SETTING_KEYS = {
+  trackAccounts: 'track_accounts',
+  defaultAccount: 'default_account',
+  trackBudgets: 'track_budgets',
+  budgets: 'budgets', // { total: 800, cats: { restorani: 60, ... } }
+};
 const toSettings = (meta = {}) => ({
   trackAccounts: !!meta.track_accounts,
   defaultAccount: meta.default_account || null,
+  trackBudgets: !!meta.track_budgets,
+  budgets: { total: meta.budgets?.total ?? null, cats: meta.budgets?.cats ?? {} },
 });
 const toUser = (u) => (u ? { id: u.id, email: u.email, settings: toSettings(u.user_metadata) } : null);
 
@@ -71,11 +80,10 @@ export async function updatePassword(password) {
   check(await sb.auth.updateUser({ password }));
 }
 
-/** Sprema postavke ({ trackAccounts, defaultAccount }) i vraća nove. */
+/** Sprema postavke (vidi SETTING_KEYS) i vraća nove. */
 export async function saveSettings(patch) {
   const meta = {};
-  if ('trackAccounts' in patch) meta.track_accounts = patch.trackAccounts;
-  if ('defaultAccount' in patch) meta.default_account = patch.defaultAccount;
+  Object.entries(SETTING_KEYS).forEach(([k, metaKey]) => { if (k in patch) meta[metaKey] = patch[k]; });
   if (isDemo) return demo.saveSettings(meta);
   const data = check(await sb.auth.updateUser({ data: meta }));
   return toSettings(data.user.user_metadata);
@@ -182,7 +190,11 @@ const demo = (() => {
       delete mem.rows;
     }
     if (mem.user && !mem.items.some((r) => r.kind === 'income')) mem.items.push(...seedIncomes());
-    if (mem.user) mem.user.settings ||= toSettings();
+    if (mem.user && !mem.user.meta) {
+      const s = mem.user.settings || {};
+      mem.user.meta = { track_accounts: !!s.trackAccounts, default_account: s.defaultAccount || null };
+    }
+    if (mem.user) mem.user.settings = toSettings(mem.user.meta);
     return mem;
   };
   const save = () => {
@@ -237,18 +249,17 @@ const demo = (() => {
     listen: (cb) => listeners.push(cb),
     signIn(email) {
       load();
-      mem.user = { id: 'demo', email: email || 'demo@primjer.hr', settings: toSettings() };
+      mem.user = { id: 'demo', email: email || 'demo@primjer.hr', meta: {}, settings: toSettings() };
       if (!mem.items.length) mem.items = [...seedExpenses(), ...seedIncomes()];
       save(); emit('SIGNED_IN');
     },
     signOut() { load(); mem.user = null; save(); emit('SIGNED_OUT'); },
     saveSettings(meta) {
       load();
-      const s = mem.user.settings;
-      if ('track_accounts' in meta) s.trackAccounts = meta.track_accounts;
-      if ('default_account' in meta) s.defaultAccount = meta.default_account;
+      mem.user.meta = { ...mem.user.meta, ...meta };
+      mem.user.settings = toSettings(mem.user.meta);
       save();
-      return { ...s };
+      return mem.user.settings;
     },
     accounts: () => [...load().accounts],
     addAccount(a) {
