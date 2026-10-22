@@ -348,6 +348,12 @@ button.row:active, button.row.pressed { background: var(--fill); }
 .cat-row .p { color: var(--text2); margin-left: 6px; font-size: 15px; }
 .cat-row.on { background: color-mix(in srgb, var(--c) 10%, var(--card)); }
 
+/* Ponavljajući unosi */
+.rep { color: var(--tint); font-size: 14px; font-weight: 600; }
+.rec-item.paused { opacity: .5; }
+.muted-text { color: var(--text2); font-size: 15px; letter-spacing: -.24px; }
+#rec-form .segmented { margin-bottom: 16px; }
+
 /* Budžeti */
 .budgets { padding: 16px 16px 12px; }
 .budgets .k { font-size: 15px; font-weight: 600; color: var(--text2); letter-spacing: -.24px; margin-bottom: 4px; }

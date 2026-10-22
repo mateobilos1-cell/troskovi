@@ -39,6 +39,9 @@ function check({ data, error }) {
 // pa aplikacija radi i ako accounts.sql još nije pokrenut.
 let withAccounts = false;
 export function useAccounts(on) { withAccounts = !!on; }
+// Isto za recurring_id (recurring.sql)
+let withRecurring = false;
+export function useRecurring(on) { withRecurring = !!on; }
 
 // ---------- Prijava ----------
 
@@ -125,16 +128,18 @@ const TABLES = {
 function fromRow(r, dateCol) {
   return {
     id: r.id, amount: Number(r.amount), category: r.category, note: r.note,
-    date: r[dateCol], account_id: r.account_id ?? null, created_at: r.created_at,
+    date: r[dateCol], account_id: r.account_id ?? null, recurring_id: r.recurring_id ?? null, created_at: r.created_at,
   };
 }
 function toRow(e, dateCol) {
   const row = { amount: e.amount, category: e.category, note: e.note };
   if (e.date) row[dateCol] = e.date;
   if (withAccounts && 'account_id' in e) row.account_id = e.account_id;
+  if (withRecurring && e.recurring_id) row.recurring_id = e.recurring_id;
   return row;
 }
-const cols = (dateCol) => `id, amount, category, note, ${dateCol}, created_at${withAccounts ? ', account_id' : ''}`;
+const cols = (dateCol) => `id, amount, category, note, ${dateCol}, created_at`
+  + `${withAccounts ? ', account_id' : ''}${withRecurring ? ', recurring_id' : ''}`;
 
 /** Zapisi s datumom u rasponu [from, to), najnoviji prvi. Datumi su 'YYYY-MM-DD'. */
 export async function list(kind, from, to) {
@@ -172,6 +177,40 @@ export async function remove(kind, id) {
   check(await sb.from(TABLES[kind].table).delete().eq('id', id));
 }
 
+/** Dodaje više zapisa iz ponavljajućih pravila; već postojeći (isto pravilo + datum) se preskaču. */
+export async function addRecurringEntries(kind, entries) {
+  if (!entries.length) return;
+  if (isDemo) return demo.addRecurringEntries(kind, entries);
+  const { table, dateCol } = TABLES[kind];
+  check(await sb.from(table).upsert(entries.map((e) => toRow(e, dateCol)),
+    { onConflict: `recurring_id,${dateCol}`, ignoreDuplicates: true }));
+}
+
+// ---------- Ponavljajući unosi (pravila) ----------
+
+const REC_COLS = 'id, kind, amount, category, note, account_id, day, start_month, last_month, active, created_at';
+const normRec = (r) => ({ ...r, amount: Number(r.amount) });
+
+export async function listRecurring() {
+  if (isDemo) return demo.recurring();
+  return check(await sb.from('recurring').select(REC_COLS).order('created_at')).map(normRec);
+}
+
+export async function addRecurring(r) {
+  if (isDemo) return demo.addRecurring(r);
+  return normRec(check(await sb.from('recurring').insert(r).select(REC_COLS).single()));
+}
+
+export async function updateRecurring(id, r) {
+  if (isDemo) return demo.updateRecurring(id, r);
+  check(await sb.from('recurring').update(r).eq('id', id));
+}
+
+export async function removeRecurring(id) {
+  if (isDemo) return demo.removeRecurring(id);
+  check(await sb.from('recurring').delete().eq('id', id));
+}
+
 // ---------- Demo način ----------
 
 const demo = (() => {
@@ -184,6 +223,7 @@ const demo = (() => {
     try { mem = JSON.parse(localStorage.getItem(KEY)); } catch { /* nedostupno */ }
     mem ||= { user: null, items: [] };
     mem.accounts ||= [];
+    mem.recurring ||= [];
     // stari demo format (samo troškovi)
     if (mem.rows) {
       mem.items = mem.rows.map(({ spent_at, ...r }) => ({ ...r, kind: 'expense', date: spent_at }));
@@ -283,5 +323,26 @@ const demo = (() => {
     },
     update(id, e) { const r = load().items.find((x) => x.id === id); if (r) Object.assign(r, e); save(); },
     remove(id) { load(); mem.items = mem.items.filter((x) => x.id !== id); save(); },
+    addRecurringEntries(kind, entries) {
+      load();
+      entries.forEach((e) => {
+        if (mem.items.some((x) => x.recurring_id === e.recurring_id && x.date === e.date)) return;
+        mem.items.push({ id: uid(), kind, note: null, account_id: null, created_at: new Date().toISOString(), ...e });
+      });
+      save();
+    },
+    recurring: () => [...load().recurring],
+    addRecurring(r) {
+      const row = { id: uid(), active: true, last_month: null, account_id: null, created_at: new Date().toISOString(), ...r };
+      load().recurring.push(row); save();
+      return row;
+    },
+    updateRecurring(id, r) { const x = load().recurring.find((y) => y.id === id); if (x) Object.assign(x, r); save(); },
+    removeRecurring(id) {
+      load();
+      mem.recurring = mem.recurring.filter((x) => x.id !== id);
+      mem.items.forEach((x) => { if (x.recurring_id === id) x.recurring_id = null; });
+      save();
+    },
   };
 })();

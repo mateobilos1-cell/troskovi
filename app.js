@@ -167,10 +167,72 @@ const state = {
   selDay: null,
   pick: { expense: null, income: null },
   accounts: [],
+  recurring: [],
+  recurringReady: false, // false dok recurring.sql nije pokrenut
 };
 
 const tracking = () => !!state.user?.settings?.trackAccounts;
 const budgeting = () => !!state.user?.settings?.trackBudgets;
+
+// ---------- Ponavljajući unosi ----------
+const parseIso = (s) => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
+// Datum u mjesecu m za zadani dan (31. u veljači → zadnji dan veljače)
+const dueDate = (m, day) => new Date(m.getFullYear(), m.getMonth(), Math.min(day, daysIn(m)));
+// Prvi mjesec od kojeg pravilo vrijedi ako ga dodaješ danas: ovaj, ili sljedeći ako je dan već prošao
+const firstMonthFor = (day) => {
+  const now = new Date();
+  const m = monthStart(now);
+  return dueDate(m, day).getDate() >= now.getDate() ? m : addMonths(m, 1);
+};
+
+async function loadRecurring() {
+  try {
+    state.recurring = await db.listRecurring();
+    state.recurringReady = true;
+  } catch (e) {
+    state.recurring = [];
+    state.recurringReady = false;
+    if (!isMissingTable(e)) toast(errorText(e), true);
+  }
+  db.useRecurring(state.recurringReady);
+}
+
+// Dodaje sve unose kojima je došao dan (i one propuštene dok aplikacija nije bila otvorena)
+let runningRecurring = false;
+async function runRecurring() {
+  if (!state.recurringReady || runningRecurring) return 0;
+  runningRecurring = true;
+  let added = 0;
+  try {
+    const now = new Date();
+    const thisMonth = monthStart(now);
+    for (const rule of state.recurring.filter((r) => r.active)) {
+      let m = rule.last_month ? addMonths(parseIso(rule.last_month), 1) : parseIso(rule.start_month);
+      const entries = [];
+      let last = null;
+      while (m <= thisMonth && dueDate(m, rule.day) <= now) {
+        entries.push({
+          amount: rule.amount, category: rule.category, note: rule.note,
+          date: isoDate(dueDate(m, rule.day)), recurring_id: rule.id,
+          ...(tracking() ? { account_id: accById(rule.account_id)?.id || null } : {}),
+        });
+        last = m;
+        m = addMonths(m, 1);
+      }
+      if (!entries.length) continue;
+      await db.addRecurringEntries(rule.kind, entries);
+      rule.last_month = isoDate(last);
+      await db.updateRecurring(rule.id, { last_month: rule.last_month });
+      added += entries.length;
+    }
+  } catch (e) {
+    toast(errorText(e), true);
+  } finally {
+    runningRecurring = false;
+  }
+  if (added) toast(`↻ Dodano ponavljajućih unosa: ${added}`);
+  return added;
+}
 const accById = (id) => state.accounts.find((a) => a.id === id) || null;
 
 // Učitava račune ako je praćenje uključeno. Ako tablica još ne postoji, praćenje se privremeno gasi.
@@ -199,6 +261,12 @@ async function boot() {
   const onScroll = () => $('#navbar').classList.toggle('scrolled', window.scrollY > $('#title').offsetHeight - 4);
   window.addEventListener('scroll', onScroll, { passive: true });
 
+  // Aplikacija s početnog zaslona zna ostati otvorena danima — kod povratka provjeri ponavljajuće unose
+  document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState !== 'visible' || !state.user || $('#app').hidden) return;
+    if (await runRecurring()) render();
+  });
+
   db.onAuthChange((event, user) => {
     if (event === 'PASSWORD_RECOVERY') return showRecovery();
     setUser(user);
@@ -206,13 +274,18 @@ async function boot() {
   setUser(await db.getUser());
 }
 
+
 function setUser(user) {
   if (state.recovering) return;
   const same = (state.user?.id ?? null) === (user?.id ?? null);
   state.user = user;
   if (same && state.started) return;
   state.started = true;
-  if (user) { $('#auth').hidden = true; $('#app').hidden = false; loadAccounts().then(() => go('trosak')); }
+  if (user) {
+    $('#auth').hidden = true;
+    $('#app').hidden = false;
+    Promise.all([loadAccounts(), loadRecurring()]).then(runRecurring).then(() => go('trosak'));
+  }
   else { closeSheet(); $('#app').hidden = true; showAuth('login'); }
 }
 
@@ -357,17 +430,18 @@ function wireCats(root, onPick) {
 }
 
 // Iznos, kategorije, bilješka i datum — isto za unos i uređivanje
-function entryFields(kind, { amount = '', category = null, note = '', date = today(), account = null } = {}) {
-  let accountRow = '';
-  if (tracking()) {
-    accountRow = state.accounts.length
-      ? `<label class="row"><span class="label">Račun</span>
-          <select class="pill-select account" aria-label="Račun">
-            <option value="">Bez računa</option>
-            ${state.accounts.map((a) => `<option value="${a.id}" ${a.id === account ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}
-          </select></label>`
-      : `<button type="button" class="row go-accounts"><span class="label">Račun</span><span class="value tinted">Dodaj u postavkama</span><span class="chev"></span></button>`;
-  }
+function accountRow(account) {
+  if (!tracking()) return '';
+  return state.accounts.length
+    ? `<label class="row"><span class="label">Račun</span>
+        <select class="pill-select account" aria-label="Račun">
+          <option value="">Bez računa</option>
+          ${state.accounts.map((a) => `<option value="${a.id}" ${a.id === account ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}
+        </select></label>`
+    : `<button type="button" class="row go-accounts"><span class="label">Račun</span><span class="value tinted">Dodaj u postavkama</span><span class="chev"></span></button>`;
+}
+
+function amountGroup(kind, amount) {
   return `
     <div class="group amount-group">
       <label class="amount-line">
@@ -375,12 +449,19 @@ function entryFields(kind, { amount = '', category = null, note = '', date = tod
         <input class="amount" inputmode="decimal" placeholder="0,00" value="${esc(amount)}" autocomplete="off" enterkeyhint="done" aria-label="Iznos">
         <span class="cur">€</span>
       </label>
-    </div>
+    </div>`;
+}
+
+function entryFields(kind, { amount = '', category = null, note = '', date = today(), account = null, repeat = false } = {}) {
+  return `
+    ${amountGroup(kind, amount)}
     <div class="group"><div class="cats">${catButtons(kind, category)}</div></div>
     <div class="group">
       <label class="row"><input class="row-input note" placeholder="Bilješka (neobavezno)" maxlength="100" value="${esc(note)}" autocomplete="off"></label>
       <label class="row"><span class="label">Datum</span><input class="pill-date date" type="date" value="${date}" max="${today()}" aria-label="Datum"></label>
-      ${accountRow}
+      ${accountRow(account)}
+      ${repeat && state.recurringReady ? `<label class="row"><span class="label">Ponavljaj svaki mjesec</span>
+        <input type="checkbox" class="switch repeat"></label>` : ''}
     </div>`;
 }
 
@@ -408,7 +489,7 @@ function itemRow(kind, r, showDate = false) {
   return `
     <button class="row item" data-id="${r.id}" data-kind="${kind}" style="--c:${c.color}">
       <span class="ico-sq">${c.icon}</span>
-      <span class="main"><span class="t">${esc(c.label)}</span>${sub ? `<span class="s">${sub}</span>` : ''}</span>
+      <span class="main"><span class="t">${esc(c.label)}${r.recurring_id ? ' <span class="rep" title="Ponavljajući unos">↻</span>' : ''}</span>${sub ? `<span class="s">${sub}</span>` : ''}</span>
       <span class="amt ${kind === 'income' ? 'pos' : ''}">${KINDS[kind].sign}${money(r.amount)}</span>
       <span class="chev"></span>
     </button>`;
@@ -428,7 +509,7 @@ async function renderEntry(kind) {
   // Forma se prikaže odmah; brojke i zadnji unosi stignu kad se učitaju.
   v.innerHTML = `
     <form id="add-form" novalidate>
-      ${entryFields(kind, { category: state.pick[kind], account: accById(state.user.settings.defaultAccount)?.id })}
+      ${entryFields(kind, { category: state.pick[kind], account: accById(state.user.settings.defaultAccount)?.id, repeat: true })}
       <button class="btn-filled ${kind === 'income' ? 'green' : ''}" type="submit">Spremi</button>
     </form>
     <div id="entry-extra"></div>`;
@@ -448,10 +529,23 @@ async function renderEntry(kind) {
     const btn = $('button[type=submit]', form);
     btn.disabled = true;
     try {
-      await db.add(kind, { ...fields, category });
-      const saved = `${cat(kind, category).icon}  ${KINDS[kind].sign}${money(amount)} spremljeno`;
+      // "Ponavljaj svaki mjesec": prvo pravilo, pa ovaj unos kao njegov prvi mjesec
+      let rule = null;
+      if ($('.repeat', form)?.checked) {
+        const d = parseIso(fields.date);
+        const month = isoDate(monthStart(d));
+        rule = await db.addRecurring({
+          kind, amount, category, note: fields.note, account_id: fields.account_id ?? null,
+          day: d.getDate(), start_month: month, last_month: month,
+        });
+        state.recurring.push(rule);
+      }
+      await db.add(kind, { ...fields, category, ...(rule ? { recurring_id: rule.id } : {}) });
+      let saved = `${cat(kind, category).icon}  ${KINDS[kind].sign}${money(amount)} spremljeno`;
+      if (rule) saved += ` · ponavlja se svakog ${rule.day}.`;
       const hint = kind === 'expense' ? await budgetHint(category, fields.date).catch(() => null) : null;
       toast(hint ? `${saved} · ${hint.text}` : saved, hint?.over);
+      if (rule) await runRecurring(); // ako je datum u prošlom mjesecu, dodaj i propuštene mjesece
       state.pick[kind] = null;
       window.scrollTo(0, 0);
       await renderEntry(kind);
@@ -981,6 +1075,8 @@ function renderPostavke() {
       <button type="button" class="row tinted add-acc" id="add-acc"><span class="plus-ico">+</span><span class="label">Dodaj račun</span></button>
     </div>` : ''}
 
+    ${recurringSection()}
+
     <div class="group-header"><span>Budžeti</span></div>
     <div class="group">
       <label class="row"><span class="label">Prati budžete</span>
@@ -997,6 +1093,7 @@ function renderPostavke() {
       ${EXPENSE_CATEGORIES.map((c) => budgetRow(c.id, `<span class="ico-sq" style="--c:${c.color}">${c.icon}</span>`, esc(c.label))).join('')}
     </div>
     <div class="group-footer">Ostavi prazno za kategorije koje ne želiš pratiti.</div>` : ''}
+
 
     <div class="group-header"><span>Korisnik</span></div>
     <div class="group">
@@ -1041,6 +1138,8 @@ function renderPostavke() {
   $('#add-acc')?.addEventListener('click', () => openAccount(null));
   $$('.acc-item', v).forEach((b) => b.addEventListener('click', () => openAccount(accById(b.dataset.id))));
 
+  wireRecurringSection(v);
+
   const btoggle = $('#budget-toggle');
   btoggle.addEventListener('change', async () => {
     btoggle.disabled = true;
@@ -1066,6 +1165,132 @@ function renderPostavke() {
         toast('Budžet spremljen');
       } catch (e) { toast(errorText(e), true); }
     });
+  });
+}
+
+// ---------- Postavke: ponavljajući unosi ----------
+function recurringSection() {
+  const header = '<div class="group-header"><span>Ponavljajući unosi</span></div>';
+  if (!state.recurringReady) {
+    return `${header}<div class="group"><div class="row"><span class="label muted-text">Za ovu opciju jednom pokreni <b>supabase/recurring.sql</b> u Supabaseu.</span></div></div>`;
+  }
+  const rows = state.recurring.map((r) => {
+    const c = cat(r.kind, r.category);
+    const sub = [r.note ? esc(c.label) : null, `svakog ${r.day}.`, r.active ? null : 'pauzirano'].filter(Boolean).join(' · ');
+    return `
+      <button type="button" class="row item rec-item ${r.active ? '' : 'paused'}" data-id="${r.id}" style="--c:${c.color}">
+        <span class="ico-sq">${c.icon}</span>
+        <span class="main"><span class="t">${esc(r.note || c.label)}</span><span class="s">${sub}</span></span>
+        <span class="amt ${r.kind === 'income' ? 'pos' : ''}">${KINDS[r.kind].sign}${money(r.amount)}</span>
+        <span class="chev"></span>
+      </button>`;
+  }).join('');
+  return `${header}
+    <div class="group">
+      ${rows}
+      <button type="button" class="row tinted add-acc" id="add-rec"><span class="plus-ico">+</span><span class="label">Dodaj ponavljajući unos</span></button>
+    </div>
+    <div class="group-footer">Plaća, najam, pretplate… Dodaju se sami na zadani dan u mjesecu kad otvoriš aplikaciju. Ako mjesec ima manje dana, unos ide na zadnji dan.</div>`;
+}
+
+function wireRecurringSection(v) {
+  $('#add-rec', v)?.addEventListener('click', () => openRecurring(null));
+  $$('.rec-item', v).forEach((b) => b.addEventListener('click', () => openRecurring(state.recurring.find((r) => r.id === b.dataset.id))));
+}
+
+// Dodavanje (rule = null) ili uređivanje ponavljajućeg unosa
+function openRecurring(rule, kind = rule?.kind || 'expense', draft = {}) {
+  const isNew = !rule;
+  let picked = draft.category ?? rule?.category ?? null;
+  const amount = draft.amount ?? (rule ? rule.amount.toFixed(2).replace('.', ',') : '');
+  const day = draft.day ?? rule?.day ?? new Date().getDate();
+  const sheet = $('#sheet');
+  sheet.innerHTML = `
+    <div class="sheet-bar">
+      <div class="grab"></div>
+      <div class="bar-row">
+        <button type="button" class="left" id="r-cancel">Odustani</button>
+        <h2>${isNew ? 'Novi ponavljajući' : 'Ponavljajući unos'}</h2>
+        <button type="submit" class="right" form="rec-form">${isNew ? 'Dodaj' : 'Spremi'}</button>
+      </div>
+    </div>
+    <form id="rec-form" novalidate>
+      ${isNew ? `
+      <div class="segmented" id="r-kind">
+        <button type="button" data-kind="expense" class="${kind === 'expense' ? 'on' : ''}">Trošak</button>
+        <button type="button" data-kind="income" class="${kind === 'income' ? 'on' : ''}">Prihod</button>
+      </div>` : ''}
+      ${amountGroup(kind, amount)}
+      <div class="group"><div class="cats">${catButtons(kind, picked)}</div></div>
+      <div class="group">
+        <label class="row"><input class="row-input note" placeholder="Bilješka (npr. Netflix)" maxlength="100" value="${esc(draft.note ?? rule?.note)}" autocomplete="off"></label>
+        <label class="row"><span class="label">Dan u mjesecu</span>
+          <select class="pill-select r-day" aria-label="Dan u mjesecu">
+            ${Array.from({ length: 31 }, (_, i) => `<option value="${i + 1}" ${i + 1 === day ? 'selected' : ''}>${i + 1}.</option>`).join('')}
+          </select></label>
+        ${accountRow(rule?.account_id ?? accById(state.user.settings.defaultAccount)?.id)}
+        ${isNew ? '' : `<label class="row"><span class="label">Aktivno</span><input type="checkbox" class="switch r-active" ${rule.active ? 'checked' : ''}></label>`}
+      </div>
+      <div class="group-footer">${isNew
+        ? 'Prvi unos dodaje se na idući takav dan. Ako je unos za ovaj mjesec već prošao, a želiš ga, dodaj ga ručno s opcijom „Ponavljaj svaki mjesec".'
+        : 'Promjene vrijede za buduće unose. Već dodani unosi ostaju kakvi jesu.'}</div>
+      ${isNew ? '' : '<div class="group"><button type="button" class="row center destructive" id="r-del">Obriši ponavljajući unos</button></div>'}
+    </form>`;
+  $('#sheet-backdrop').hidden = false;
+  sheet.hidden = false;
+  document.body.style.overflow = 'hidden';
+
+  const form = $('#rec-form');
+  wireFields(form);
+  wireCats(form, (id) => { picked = id; });
+  $('#r-cancel').addEventListener('click', closeSheet);
+
+  // promjena vrste (trošak/prihod) mijenja kategorije, ostalo se zadržava
+  $$('#r-kind button', form).forEach((b) => b.addEventListener('click', () => {
+    if (b.dataset.kind === kind) return;
+    openRecurring(null, b.dataset.kind, {
+      amount: $('.amount', form).value, note: $('.note', form).value, day: Number($('.r-day', form).value),
+    });
+  }));
+
+  $('#r-del')?.addEventListener('click', async () => {
+    if (!confirm('Obrisati ponavljajući unos? Već dodani unosi ostaju.')) return;
+    try {
+      await db.removeRecurring(rule.id);
+      state.recurring = state.recurring.filter((r) => r.id !== rule.id);
+      closeSheet();
+      toast('Obrisano');
+      render();
+    } catch (e) { toast(errorText(e), true); }
+  });
+
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const amountVal = parseAmount($('.amount', form).value);
+    if (!(amountVal > 0)) return toast('Upiši iznos', true);
+    if (!picked) return toast('Odaberi kategoriju', true);
+    const d = Number($('.r-day', form).value);
+    const data = {
+      amount: amountVal, category: picked, note: $('.note', form).value.trim() || null, day: d,
+      account_id: tracking() ? ($('.account', form)?.value || null) : (rule?.account_id ?? null),
+    };
+    try {
+      if (isNew) {
+        const created = await db.addRecurring({ kind, ...data, start_month: isoDate(firstMonthFor(d)), last_month: null });
+        state.recurring.push(created);
+      } else {
+        const active = $('.r-active', form).checked;
+        // Nakon pauze kreće ispočetka, bez nadoknade propuštenih mjeseci
+        if (active && !rule.active) Object.assign(data, { start_month: isoDate(firstMonthFor(d)), last_month: null });
+        data.active = active;
+        await db.updateRecurring(rule.id, data);
+        Object.assign(rule, data);
+      }
+      closeSheet();
+      toast(isNew ? 'Ponavljajući unos dodan' : 'Promjene spremljene');
+      await runRecurring();
+      render();
+    } catch (e) { toast(errorText(e), true); }
   });
 }
 
