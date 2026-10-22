@@ -348,6 +348,55 @@ button.row:active, button.row.pressed { background: var(--fill); }
 .cat-row .p { color: var(--text2); margin-left: 6px; font-size: 15px; }
 .cat-row.on { background: color-mix(in srgb, var(--c) 10%, var(--card)); }
 
+/* ---------- Bez interneta ---------- */
+#sync-banner {
+  max-width: 568px; margin: 0 auto 10px; width: calc(100% - 32px);
+  padding: 8px 14px; border-radius: 14px; text-align: center;
+  background: color-mix(in srgb, #ff9500 16%, var(--card)); color: var(--text);
+  font-size: 13px; font-weight: 600; letter-spacing: -.08px;
+  animation: view-in .3s ease both;
+}
+.pend { font-size: 13px; }
+
+/* ---------- Animacije ---------- */
+@keyframes view-in { from { opacity: 0; transform: translateY(10px); } }
+/* sadržaj kartice izroni dio po dio */
+#view.entering > * { animation: view-in .38s cubic-bezier(.2, .8, .3, 1) both; }
+#view.entering > *:nth-child(2) { animation-delay: .04s; }
+#view.entering > *:nth-child(3) { animation-delay: .08s; }
+#view.entering > *:nth-child(4) { animation-delay: .12s; }
+#view.entering > *:nth-child(5) { animation-delay: .16s; }
+#view.entering > *:nth-child(6) { animation-delay: .2s; }
+#view.entering > *:nth-child(n+7) { animation-delay: .24s; }
+.extra-in > * { animation: view-in .35s cubic-bezier(.2, .8, .3, 1) both; }
+.extra-in > *:nth-child(2) { animation-delay: .05s; }
+.extra-in > *:nth-child(n+3) { animation-delay: .1s; }
+
+/* kvačica na gumbu nakon spremanja */
+.btn-filled.done { background: var(--green); opacity: 1; transform: none; }
+.btn-filled .check { width: 24px; height: 24px; display: block; margin: -2px auto; fill: none; stroke: #fff; stroke-width: 2.8; stroke-linecap: round; stroke-linejoin: round; }
+.btn-filled .check path { stroke-dasharray: 24; stroke-dashoffset: 24; animation: draw .35s .05s ease-out forwards; }
+@keyframes draw { to { stroke-dashoffset: 0; } }
+
+/* ikona odabrane kartice lagano "skoči" */
+.tabbar button.on svg { animation: pop .35s cubic-bezier(.3, 1.6, .5, 1); }
+@keyframes pop { 40% { transform: scale(.82); } }
+.tabbar button:active svg { transform: scale(.88); }
+
+/* donji prozor se zatvara klizanjem prema dolje */
+#sheet.closing { animation: down .26s cubic-bezier(.4, 0, 1, 1) forwards; }
+#sheet-backdrop.closing { animation: fade-out .26s forwards; }
+@keyframes down { to { transform: translateY(100%); } }
+@keyframes fade-out { to { opacity: 0; } }
+
+/* lagani odaziv na dodir redaka */
+button.row { transition: background-color .15s; }
+.month-nav button:active, .cal-nav button:active { transform: scale(.9); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-delay: 0s !important; transition-duration: .01ms !important; }
+}
+
 /* Ponavljajući unosi */
 .rep { color: var(--tint); font-size: 14px; font-weight: 600; }
 .rec-item.paused { opacity: .5; }

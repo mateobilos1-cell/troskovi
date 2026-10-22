@@ -133,7 +133,7 @@ function errorText(e) {
   if (code === 'user_already_exists' || /already registered/i.test(msg)) return 'Račun s tim e-mailom već postoji. Prijavi se.';
   if (code === 'weak_password' || /password should be/i.test(msg)) return 'Lozinka mora imati barem 6 znakova.';
   if (/rate limit|too many/i.test(msg)) return 'Previše pokušaja. Pričekaj malo pa pokušaj ponovno.';
-  if (/failed to fetch|network/i.test(msg)) return 'Nema veze s internetom.';
+  if (db.isNetworkError(e)) return 'Nema veze s internetom.';
   if (isMissingTable(e) && /accounts|account_id/.test(msg)) return 'Tablica za račune još ne postoji — pokreni supabase/accounts.sql u Supabaseu.';
   if (isMissingTable(e)) return 'Tablica za prihode još ne postoji — pokreni supabase/incomes.sql u Supabaseu.';
   return msg || 'Nešto je pošlo po zlu.';
@@ -200,10 +200,11 @@ async function loadRecurring() {
 // Dodaje sve unose kojima je došao dan (i one propuštene dok aplikacija nije bila otvorena)
 let runningRecurring = false;
 async function runRecurring() {
-  if (!state.recurringReady || runningRecurring) return 0;
+  if (!state.recurringReady || runningRecurring || !navigator.onLine) return 0;
   runningRecurring = true;
   let added = 0;
   try {
+    state.recurring = await db.listRecurring(true); // svježe s mreže, da se ništa ne doda dvaput
     const now = new Date();
     const thisMonth = monthStart(now);
     for (const rule of state.recurring.filter((r) => r.active)) {
@@ -226,7 +227,7 @@ async function runRecurring() {
       added += entries.length;
     }
   } catch (e) {
-    toast(errorText(e), true);
+    if (!db.isNetworkError(e)) toast(errorText(e), true); // bez veze: pokušat će opet kasnije
   } finally {
     runningRecurring = false;
   }
@@ -261,17 +262,66 @@ async function boot() {
   const onScroll = () => $('#navbar').classList.toggle('scrolled', window.scrollY > $('#title').offsetHeight - 4);
   window.addEventListener('scroll', onScroll, { passive: true });
 
-  // Aplikacija s početnog zaslona zna ostati otvorena danima — kod povratka provjeri ponavljajuće unose
-  document.addEventListener('visibilitychange', async () => {
-    if (document.visibilityState !== 'visible' || !state.user || $('#app').hidden) return;
-    if (await runRecurring()) render();
-  });
+  // Aplikacija se sprema na uređaj (brže otvaranje i rad bez interneta)
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+    navigator.serviceWorker.addEventListener('message', (e) => {
+      if (e.data?.type === 'update') toast('Nova verzija je spremna — zatvori i ponovno otvori aplikaciju');
+    });
+  }
+
+  // Aplikacija s početnog zaslona zna ostati otvorena danima — kod povratka pošalji unose koji čekaju
+  // i provjeri ponavljajuće unose
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') syncNow(); });
+  window.addEventListener('online', syncNow);
+  window.addEventListener('offline', updateSyncBanner);
+  db.onDataChange(onDataChanged);
 
   db.onAuthChange((event, user) => {
     if (event === 'PASSWORD_RECOVERY') return showRecovery();
     setUser(user);
   });
   setUser(await db.getUser());
+}
+
+// Pošalji unose koji čekaju vezu i dodaj ponavljajuće unose kojima je došao dan
+async function syncNow() {
+  updateSyncBanner();
+  if (!state.user || $('#app').hidden) return;
+  const sent = await db.flushQueue();
+  if (sent) toast(`☁️ Poslano unosa: ${sent}`);
+  if (await runRecurring()) onDataChanged();
+  updateSyncBanner();
+}
+
+// Stigli su noviji podaci od prikazanih — osvježi ekran bez animacija i bez diranja forme
+function onDataChanged() {
+  updateSyncBanner();
+  if (!state.user || $('#app').hidden || !$('#sheet').hidden) return;
+  if (state.view === 'trosak') return renderEntryExtra('expense');
+  if (state.view === 'prihod') return renderEntryExtra('income');
+  if (document.activeElement?.tagName === 'INPUT') return; // npr. upisuje budžet u postavkama
+  render();
+}
+
+const plural = (n, one, few, many) => {
+  const d = n % 10;
+  const dd = n % 100;
+  if (d === 1 && dd !== 11) return one;
+  if (d >= 2 && d <= 4 && (dd < 12 || dd > 14)) return few;
+  return many;
+};
+
+function updateSyncBanner() {
+  const el = $('#sync-banner');
+  if (!el) return;
+  const n = state.user ? db.pendingCount() : 0;
+  const offline = !navigator.onLine;
+  let text = '';
+  if (n) text = `⏳ ${n} ${plural(n, 'unos čeka', 'unosa čekaju', 'unosa čeka')} slanje${offline ? ' · nema veze' : ''}`;
+  else if (offline) text = '📡 Nema veze — prikazani su zadnji spremljeni podaci';
+  el.textContent = text;
+  el.hidden = !text;
 }
 
 
@@ -284,7 +334,10 @@ function setUser(user) {
   if (user) {
     $('#auth').hidden = true;
     $('#app').hidden = false;
-    Promise.all([loadAccounts(), loadRecurring()]).then(runRecurring).then(() => go('trosak'));
+    Promise.all([loadAccounts(), loadRecurring()]).then(() => {
+      go('trosak');
+      syncNow();
+    });
   }
   else { closeSheet(); $('#app').hidden = true; showAuth('login'); }
 }
@@ -399,8 +452,39 @@ function go(view) {
   $$('.tabbar button').forEach((b) => b.classList.toggle('on', b.dataset.view === view));
   window.scrollTo(0, 0);
   $('#navbar').classList.remove('scrolled');
+  // sadržaj nove kartice lagano "izroni", a brojke se odbroje do iznosa
+  const v = $('#view');
+  v.classList.remove('entering');
+  void v.offsetWidth; // ponovno pokreni animaciju
+  v.classList.add('entering');
+  clearTimeout(enterTimer);
+  enterTimer = setTimeout(() => v.classList.remove('entering'), 800);
+  state.countNext = true;
   render();
 }
+let enterTimer;
+
+const reduceMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// Brojke s data-count="iznos" odbroje se od nule (samo kod ulaska u karticu ili promjene mjeseca)
+function countUp(root) {
+  if (!state.countNext) return;
+  state.countNext = false;
+  if (reduceMotion()) return;
+  $$('[data-count]', root).forEach((el) => {
+    const to = Number(el.dataset.count);
+    const fmtFn = el.dataset.fmt === 'signed' ? signed : money;
+    const start = performance.now();
+    const step = (t) => {
+      const p = Math.min((t - start) / 650, 1);
+      el.textContent = fmtFn(to * (1 - (1 - p) ** 3));
+      if (p < 1 && el.isConnected) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  });
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function render() {
   const view = state.view;
@@ -410,6 +494,18 @@ async function render() {
     else if (view === 'pregled') await renderPregled();
     else renderPostavke();
   } catch (e) {
+    if (db.isNetworkError(e) && view === 'pregled' && state.view === view) {
+      $('#view').innerHTML = `
+        <div class="month-nav">
+          <button type="button" id="prev-m" aria-label="Prethodni mjesec">${CHEVRON_L}</button>
+          <span class="m">${monthName(state.month)} ${state.month.getFullYear()}.</span>
+          <button type="button" id="next-m" aria-label="Sljedeći mjesec">${CHEVRON_R}</button>
+        </div>
+        <div class="group empty">📡 Nema veze, a podaci za ovaj mjesec još nisu spremljeni na uređaj.<br>Prikazat će se čim se veza vrati.</div>`;
+      $('#prev-m').addEventListener('click', () => changeMonth(-1));
+      $('#next-m').addEventListener('click', () => changeMonth(1));
+      return;
+    }
     toast(errorText(e), true);
   }
 }
@@ -489,7 +585,7 @@ function itemRow(kind, r, showDate = false) {
   return `
     <button class="row item" data-id="${r.id}" data-kind="${kind}" style="--c:${c.color}">
       <span class="ico-sq">${c.icon}</span>
-      <span class="main"><span class="t">${esc(c.label)}${r.recurring_id ? ' <span class="rep" title="Ponavljajući unos">↻</span>' : ''}</span>${sub ? `<span class="s">${sub}</span>` : ''}</span>
+      <span class="main"><span class="t">${esc(c.label)}${r.recurring_id ? ' <span class="rep" title="Ponavljajući unos">↻</span>' : ''}${r.pending ? ' <span class="pend" title="Čeka vezu">⏳</span>' : ''}</span>${sub ? `<span class="s">${sub}</span>` : ''}</span>
       <span class="amt ${kind === 'income' ? 'pos' : ''}">${KINDS[kind].sign}${money(r.amount)}</span>
       <span class="chev"></span>
     </button>`;
@@ -540,21 +636,33 @@ async function renderEntry(kind) {
         });
         state.recurring.push(rule);
       }
-      await db.add(kind, { ...fields, category, ...(rule ? { recurring_id: rule.id } : {}) });
+      const row = await db.add(kind, { ...fields, category, ...(rule ? { recurring_id: rule.id } : {}) });
       let saved = `${cat(kind, category).icon}  ${KINDS[kind].sign}${money(amount)} spremljeno`;
+      if (row.pending) saved = `💾 ${KINDS[kind].sign}${money(amount)} spremljeno na uređaj — poslat će se kad se vrati veza`;
       if (rule) saved += ` · ponavlja se svakog ${rule.day}.`;
       const hint = kind === 'expense' ? await budgetHint(category, fields.date).catch(() => null) : null;
       toast(hint ? `${saved} · ${hint.text}` : saved, hint?.over);
+      updateSyncBanner();
+      // kvačica na gumbu pa prazna forma za idući unos
+      btn.classList.add('done');
+      btn.innerHTML = '<svg viewBox="0 0 24 24" class="check"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
+      if (!reduceMotion()) await sleep(550);
       if (rule) await runRecurring(); // ako je datum u prošlom mjesecu, dodaj i propuštene mjesece
       state.pick[kind] = null;
-      window.scrollTo(0, 0);
-      await renderEntry(kind);
+      window.scrollTo({ top: 0, behavior: reduceMotion() ? 'auto' : 'smooth' });
+      if (state.view === view) await renderEntry(kind);
     } catch (e) {
       toast(errorText(e), true);
       btn.disabled = false;
     }
   });
 
+  await renderEntryExtra(kind);
+}
+
+// Brojke i zadnji unosi ispod forme (osvježava se i sam, kad stignu noviji podaci)
+async function renderEntryExtra(kind) {
+  const view = state.view;
   const m = monthStart(new Date());
   const from = isoDate(m);
   const to = isoDate(addMonths(m, 1));
@@ -563,27 +671,33 @@ async function renderEntry(kind) {
     db.listRecent(kind, 8),
     kind === 'income' ? db.list('expense', from, to) : null,
   ]);
-  if (state.view !== view) return;
+  const extra = $('#entry-extra');
+  if (state.view !== view || !extra) return;
 
+  // data-count: brojka se odbroji do iznosa
+  const num = (n, fmt = 'money') => `data-count="${n}" data-fmt="${fmt}">${fmt === 'signed' ? signed(n) : money(n)}`;
   let stats;
   if (kind === 'expense') {
     stats = `
-      <div class="stat"><div class="k">Danas</div><div class="v">${money(sum(monthRows.filter((r) => r.date === today())))}</div></div>
-      <div class="stat"><div class="k">${monthName(m)}</div><div class="v">${money(sum(monthRows))}</div></div>`;
+      <div class="stat"><div class="k">Danas</div><div class="v" ${num(sum(monthRows.filter((r) => r.date === today())))}</div></div>
+      <div class="stat"><div class="k">${monthName(m)}</div><div class="v" ${num(sum(monthRows))}</div></div>`;
   } else {
     const balance = sum(monthRows) - sum(other);
     stats = `
-      <div class="stat"><div class="k">Prihodi · ${MONTHS[m.getMonth()]}</div><div class="v pos">${money(sum(monthRows))}</div></div>
-      <div class="stat"><div class="k">Bilanca</div><div class="v ${balance < 0 ? 'neg' : ''}">${signed(balance)}</div></div>`;
+      <div class="stat"><div class="k">Prihodi · ${MONTHS[m.getMonth()]}</div><div class="v pos" ${num(sum(monthRows))}</div></div>
+      <div class="stat"><div class="k">Bilanca</div><div class="v ${balance < 0 ? 'neg' : ''}" ${num(balance, 'signed')}</div></div>`;
   }
 
-  $('#entry-extra').innerHTML = `
+  const first = !extra.hasChildNodes();
+  extra.classList.toggle('extra-in', first && !reduceMotion());
+  extra.innerHTML = `
     <div class="stats">${stats}</div>
     <div class="section-title"><span>Zadnji unosi</span></div>
     ${recent.length
       ? `<div class="group">${recent.map((r) => itemRow(kind, r, true)).join('')}</div>`
       : `<div class="group empty">${kind === 'income' ? 'Još nema prihoda. Upiši plaću ili drugi prihod gore.' : 'Još nema unosa. Upiši prvi trošak gore.'}</div>`}`;
-  wireItems(kind, $('#entry-extra'), recent);
+  wireItems(kind, extra, recent);
+  countUp(extra);
 }
 
 // ---------- Budžeti ----------
@@ -827,7 +941,7 @@ async function renderPregled() {
 
     <div class="group total balance">
       <div class="k">Bilanca</div>
-      <div class="big ${balance < 0 ? 'neg' : income > 0 ? 'pos' : ''}">${signed(balance)}</div>
+      <div class="big ${balance < 0 ? 'neg' : income > 0 ? 'pos' : ''}" data-count="${balance}" data-fmt="signed">${signed(balance)}</div>
       <div class="split">
         <div><span class="dot" style="background:var(--green)"></span>Prihodi<b class="pos">${money(income)}</b></div>
         <div><span class="dot" style="background:var(--tint)"></span>Troškovi<b>${money(spent)}</b></div>
@@ -844,7 +958,7 @@ async function renderPregled() {
 
     <div class="group total">
       <div class="k">${K.totalLabel}</div>
-      <div class="big ${kind === 'income' && total > 0 ? 'pos' : ''}">${money(total)}</div>
+      <div class="big ${kind === 'income' && total > 0 ? 'pos' : ''}" data-count="${total}">${money(total)}</div>
       <div class="sub">${cur.length} ${cur.length === 1 ? 'unos' : 'unosa'} · prosjek ${money(total / daysElapsed)} dnevno</div>
       ${delta}
       <div class="chart">
@@ -920,6 +1034,7 @@ async function renderPregled() {
     render();
   }));
   animateDonut(v, `${isoDate(m)}|${kind}`);
+  countUp(v);
   $$('.acc-row', v).forEach((b) => b.addEventListener('click', () => {
     state.filterAcc = state.filterAcc === b.dataset.acc ? null : b.dataset.acc;
     render();
@@ -954,6 +1069,7 @@ async function changeMonth(delta, keepCalendar = false) {
   state.filterCat = null;
   state.filterAcc = null;
   state.calAnim = keepCalendar ? (delta > 0 ? 'from-right' : 'from-left') : null;
+  state.countNext = true;
   try {
     await render();
     const after = $('.cal')?.getBoundingClientRect().top;
@@ -1236,9 +1352,7 @@ function openRecurring(rule, kind = rule?.kind || 'expense', draft = {}) {
         : 'Promjene vrijede za buduće unose. Već dodani unosi ostaju kakvi jesu.'}</div>
       ${isNew ? '' : '<div class="group"><button type="button" class="row center destructive" id="r-del">Obriši ponavljajući unos</button></div>'}
     </form>`;
-  $('#sheet-backdrop').hidden = false;
-  sheet.hidden = false;
-  document.body.style.overflow = 'hidden';
+  openSheet();
 
   const form = $('#rec-form');
   wireFields(form);
@@ -1343,10 +1457,7 @@ function openAccount(a) {
       <div class="group-footer">Zadani račun je unaprijed odabran kod svakog novog unosa.</div>
       ${isNew ? '' : `<div class="group"><button type="button" class="row center destructive" id="a-del">Obriši račun</button></div>`}
     </form>`;
-  $('#sheet-backdrop').hidden = false;
-  sheet.hidden = false;
-  sheet.scrollTop = 0;
-  document.body.style.overflow = 'hidden';
+  openSheet();
 
   const form = $('#acc-form');
   const nameEl = $('#a-name');
@@ -1417,10 +1528,7 @@ function openEdit(kind, r) {
         <button type="button" class="row center destructive" id="e-del">${K.deleteLabel}</button>
       </div>
     </form>`;
-  $('#sheet-backdrop').hidden = false;
-  sheet.hidden = false;
-  sheet.scrollTop = 0;
-  document.body.style.overflow = 'hidden';
+  openSheet();
 
   const form = $('#edit-form');
   wireFields(form);
@@ -1450,9 +1558,34 @@ function openEdit(kind, r) {
   });
 }
 
+// Donji prozor: klizi gore kod otvaranja i dolje kod zatvaranja
+let sheetTimer;
+function openSheet() {
+  clearTimeout(sheetTimer);
+  const sheet = $('#sheet');
+  const backdrop = $('#sheet-backdrop');
+  sheet.classList.remove('closing');
+  backdrop.classList.remove('closing');
+  backdrop.hidden = false;
+  sheet.hidden = false;
+  sheet.scrollTop = 0;
+  document.body.style.overflow = 'hidden';
+}
+
 function closeSheet() {
-  $('#sheet').hidden = true;
-  $('#sheet-backdrop').hidden = true;
-  $('#sheet').innerHTML = '';
+  const sheet = $('#sheet');
+  const backdrop = $('#sheet-backdrop');
   document.body.style.overflow = '';
+  const finish = () => {
+    sheet.hidden = true;
+    backdrop.hidden = true;
+    sheet.classList.remove('closing');
+    backdrop.classList.remove('closing');
+    sheet.innerHTML = '';
+  };
+  if (sheet.hidden || reduceMotion()) return finish();
+  sheet.classList.add('closing');
+  backdrop.classList.add('closing');
+  clearTimeout(sheetTimer);
+  sheetTimer = setTimeout(finish, 260);
 }
