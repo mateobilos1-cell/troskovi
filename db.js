@@ -23,12 +23,14 @@ const SETTING_KEYS = {
   defaultAccount: 'default_account',
   trackBudgets: 'track_budgets',
   budgets: 'budgets', // { total: 800, cats: { restorani: 60, ... } }
+  overviewHidden: 'overview_hidden', // dijelovi kartice Pregled koje korisnik ne želi vidjeti
 };
 const toSettings = (meta = {}) => ({
   trackAccounts: !!meta.track_accounts,
   defaultAccount: meta.default_account || null,
   trackBudgets: !!meta.track_budgets,
   budgets: { total: meta.budgets?.total ?? null, cats: meta.budgets?.cats ?? {} },
+  overviewHidden: Array.isArray(meta.overview_hidden) ? meta.overview_hidden : [],
 });
 const toUser = (u) => (u ? { id: u.id, email: u.email, settings: toSettings(u.user_metadata) } : null);
 

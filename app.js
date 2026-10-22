@@ -931,6 +931,11 @@ async function renderPregled() {
   // Dnevnik: odabrani dan u kalendaru (u tekućem mjesecu zadano je danas)
   if (!state.selDay || state.selDay.slice(0, 7) !== mFrom.slice(0, 7)) state.selDay = isCurrent ? today() : null;
 
+  // Dijelovi koje je korisnik sakrio u Postavkama → Prikaz kartice Pregled
+  const show = (key) => !state.user.settings.overviewHidden.includes(key);
+  const anyKindPart = ['total', 'categories', 'accounts', 'journal'].some(show);
+  const nothing = !overviewParts().some((p) => show(p.key)) && !filtered;
+
   const v = $('#view');
   v.innerHTML = `
     <div class="month-nav">
@@ -939,6 +944,10 @@ async function renderPregled() {
       <button type="button" id="next-m" aria-label="Sljedeći mjesec" ${isCurrent ? 'disabled' : ''}>${CHEVRON_R}</button>
     </div>
 
+    ${nothing ? `<div class="group empty">Svi dijelovi Pregleda su skriveni.<br>
+      <button type="button" class="btn-plain" id="go-layout">Odaberi što prikazati</button></div>` : ''}
+
+    ${show('balance') ? `
     <div class="group total balance">
       <div class="k">Bilanca</div>
       <div class="big ${balance < 0 ? 'neg' : income > 0 ? 'pos' : ''}" data-count="${balance}" data-fmt="signed">${signed(balance)}</div>
@@ -947,15 +956,17 @@ async function renderPregled() {
         <div><span class="dot" style="background:var(--tint)"></span>Troškovi<b>${money(spent)}</b></div>
       </div>
       ${balanceBody}
-    </div>
+    </div>` : ''}
 
-    ${budgetCard(m, curOf(expRows), isCurrent)}
+    ${show('budgets') ? budgetCard(m, curOf(expRows), isCurrent) : ''}
 
+    ${anyKindPart ? `
     <div class="segmented" id="kind-switch">
       <button type="button" data-kind="expense" class="${kind === 'expense' ? 'on' : ''}">Troškovi</button>
       <button type="button" data-kind="income" class="${kind === 'income' ? 'on' : ''}">Prihodi</button>
-    </div>
+    </div>` : ''}
 
+    ${show('total') ? `
     <div class="group total">
       <div class="k">${K.totalLabel}</div>
       <div class="big ${kind === 'income' && total > 0 ? 'pos' : ''}" data-count="${total}">${money(total)}</div>
@@ -965,9 +976,9 @@ async function renderPregled() {
         <svg viewBox="0 0 ${days * 10} 96" preserveAspectRatio="none" aria-hidden="true">${bars}</svg>
         <div class="axis"><span>1.</span><span>${Math.ceil(days / 2)}.</span><span>${days}.</span></div>
       </div>
-    </div>
+    </div>` : ''}
 
-    ${catList.length ? `
+    ${catList.length && show('categories') ? `
     <div class="section-title"><span>${K.breakdown}</span></div>
     <div class="group">
       ${donutChart(kind, catList, total, `${monthName(m)}`)}
@@ -981,7 +992,7 @@ async function renderPregled() {
       }).join('')}
     </div>` : ''}
 
-    ${accList.length ? `
+    ${accList.length && show('accounts') ? `
     <div class="section-title"><span>Po računima</span></div>
     <div class="group">
       ${accList.map(([key, val]) => {
@@ -1005,14 +1016,15 @@ async function renderPregled() {
         ${state.filterAcc ? `<button type="button" class="filter-chip" id="clear-acc">${esc(accLabel(state.filterAcc)?.name)} <span class="x">✕</span></button>` : ''}
       </span>
     </div>
-    ${listHtml}` : `
+    ${listHtml}` : show('journal') ? `
     <div class="section-title"><span>Dnevnik</span></div>
     <div class="segmented" id="log-switch">
       <button type="button" data-log="kalendar">Kalendar</button>
       <button type="button" data-log="popis">Popis</button>
     </div>
-    <div id="log"></div>`}
+    <div id="log"></div>` : ''}
   `;
+  $('#go-layout')?.addEventListener('click', openOverviewLayout);
 
   const resetFilters = () => { state.filterCat = null; state.filterAcc = null; };
   $('#prev-m').addEventListener('click', () => changeMonth(-1));
@@ -1171,7 +1183,17 @@ function renderLog(ctx) {
 function renderPostavke() {
   const v = $('#view');
   const def = state.user.settings.defaultAccount;
+  const shownParts = overviewParts().filter((p) => !state.user.settings.overviewHidden.includes(p.key)).length;
   v.innerHTML = `
+    <div class="group-header"><span>Prikaz</span></div>
+    <div class="group">
+      <button type="button" class="row" id="overview-layout" style="--sep-left:60px">
+        <span class="ico-sq" style="--c:var(--tint)">📊</span>
+        <span class="label">Kartica Pregled</span>
+        <span class="value">${shownParts} od ${overviewParts().length}</span><span class="chev"></span>
+      </button>
+    </div>
+
     <div class="group-header"><span>Računi i kartice</span></div>
     <div class="group">
       <label class="row"><span class="label">Prati račune</span>
@@ -1255,6 +1277,7 @@ function renderPostavke() {
   $$('.acc-item', v).forEach((b) => b.addEventListener('click', () => openAccount(accById(b.dataset.id))));
 
   wireRecurringSection(v);
+  $('#overview-layout').addEventListener('click', openOverviewLayout);
 
   const btoggle = $('#budget-toggle');
   btoggle.addEventListener('change', async () => {
@@ -1282,6 +1305,55 @@ function renderPostavke() {
       } catch (e) { toast(errorText(e), true); }
     });
   });
+}
+
+// ---------- Postavke: prikaz kartice Pregled ----------
+const OVERVIEW_PARTS = [
+  { key: 'balance', icon: '⚖️', label: 'Bilanca', desc: 'Prihodi minus troškovi u mjesecu' },
+  { key: 'budgets', icon: '🎯', label: 'Budžeti', desc: 'Koliko ti je ostalo do limita', available: () => budgeting() },
+  { key: 'total', icon: '📊', label: 'Ukupno i graf po danima', desc: 'Zbroj, dnevni prosjek i usporedba s prošlim mjesecom' },
+  { key: 'categories', icon: '🍩', label: 'Po kategorijama', desc: 'Prsten i popis kategorija' },
+  { key: 'accounts', icon: '💳', label: 'Po računima', desc: 'Koliko ide s kojeg računa', available: () => tracking() },
+  { key: 'journal', icon: '🗓️', label: 'Dnevnik', desc: 'Kalendar i popis svih unosa' },
+];
+// samo dijelovi koji imaju smisla (npr. budžeti tek kad su uključeni)
+const overviewParts = () => OVERVIEW_PARTS.filter((p) => !p.available || p.available());
+
+function openOverviewLayout() {
+  const hidden = new Set(state.user.settings.overviewHidden);
+  const sheet = $('#sheet');
+  sheet.innerHTML = `
+    <div class="sheet-bar">
+      <div class="grab"></div>
+      <div class="bar-row">
+        <span></span>
+        <h2>Kartica Pregled</h2>
+        <button type="button" class="right" id="o-done">Gotovo</button>
+      </div>
+    </div>
+    <div class="group-header"><span>Prikaži</span></div>
+    <div class="group">
+      ${overviewParts().map((p) => `
+        <label class="row layout-row">
+          <span class="ico-sq" style="--c:var(--tint)">${p.icon}</span>
+          <span class="main"><span class="t">${p.label}</span><span class="s">${p.desc}</span></span>
+          <input type="checkbox" class="switch" data-key="${p.key}" ${hidden.has(p.key) ? '' : 'checked'}>
+        </label>`).join('')}
+    </div>
+    <div class="group-footer">Isključeni dijelovi se ne prikazuju u Pregledu. Podaci se ne brišu i uvijek ih možeš ponovno uključiti.</div>`;
+  openSheet();
+
+  const close = () => { closeSheet(); render(); };
+  $('#o-done').addEventListener('click', close);
+  $$('.switch', sheet).forEach((sw) => sw.addEventListener('change', async () => {
+    if (sw.checked) hidden.delete(sw.dataset.key); else hidden.add(sw.dataset.key);
+    try {
+      state.user.settings = await db.saveSettings({ overviewHidden: [...hidden] });
+    } catch (e) {
+      sw.checked = !sw.checked;
+      toast(errorText(e), true);
+    }
+  }));
 }
 
 // ---------- Postavke: ponavljajući unosi ----------

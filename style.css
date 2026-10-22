@@ -397,6 +397,11 @@ button.row { transition: background-color .15s; }
   *, *::before, *::after { animation-duration: .01ms !important; animation-delay: 0s !important; transition-duration: .01ms !important; }
 }
 
+/* Prikaz kartice Pregled */
+.layout-row { --sep-left: 60px; }
+.layout-row .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.layout-row .s { font-size: 13px; color: var(--text2); letter-spacing: -.08px; }
+
 /* Ponavljajući unosi */
 .rep { color: var(--tint); font-size: 14px; font-weight: 600; }
 .rec-item.paused { opacity: .5; }
