@@ -24,6 +24,7 @@ const SETTING_KEYS = {
   trackBudgets: 'track_budgets',
   budgets: 'budgets', // { total: 800, cats: { restorani: 60, ... } }
   overviewHidden: 'overview_hidden', // dijelovi kartice Pregled koje korisnik ne želi vidjeti
+  overviewOrder: 'overview_order', // redoslijed dijelova kartice Pregled
 };
 const toSettings = (meta = {}) => ({
   trackAccounts: !!meta.track_accounts,
@@ -31,6 +32,7 @@ const toSettings = (meta = {}) => ({
   trackBudgets: !!meta.track_budgets,
   budgets: { total: meta.budgets?.total ?? null, cats: meta.budgets?.cats ?? {} },
   overviewHidden: Array.isArray(meta.overview_hidden) ? meta.overview_hidden : [],
+  overviewOrder: Array.isArray(meta.overview_order) ? meta.overview_order : [],
 });
 const toUser = (u) => (u ? { id: u.id, email: u.email, settings: toSettings(u.user_metadata) } : null);
 

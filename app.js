@@ -931,23 +931,12 @@ async function renderPregled() {
   // Dnevnik: odabrani dan u kalendaru (u tekućem mjesecu zadano je danas)
   if (!state.selDay || state.selDay.slice(0, 7) !== mFrom.slice(0, 7)) state.selDay = isCurrent ? today() : null;
 
-  // Dijelovi koje je korisnik sakrio u Postavkama → Prikaz kartice Pregled
+  // Dijelovi i redoslijed koje je korisnik odabrao u Postavkama → Kartica Pregled
   const show = (key) => !state.user.settings.overviewHidden.includes(key);
-  const anyKindPart = ['total', 'categories', 'accounts', 'journal'].some(show);
   const nothing = !overviewParts().some((p) => show(p.key)) && !filtered;
 
-  const v = $('#view');
-  v.innerHTML = `
-    <div class="month-nav">
-      <button type="button" id="prev-m" aria-label="Prethodni mjesec">${CHEVRON_L}</button>
-      <span class="m">${monthName(m)} ${m.getFullYear()}.</span>
-      <button type="button" id="next-m" aria-label="Sljedeći mjesec" ${isCurrent ? 'disabled' : ''}>${CHEVRON_R}</button>
-    </div>
-
-    ${nothing ? `<div class="group empty">Svi dijelovi Pregleda su skriveni.<br>
-      <button type="button" class="btn-plain" id="go-layout">Odaberi što prikazati</button></div>` : ''}
-
-    ${show('balance') ? `
+  const parts = {
+    balance: show('balance') ? `
     <div class="group total balance">
       <div class="k">Bilanca</div>
       <div class="big ${balance < 0 ? 'neg' : income > 0 ? 'pos' : ''}" data-count="${balance}" data-fmt="signed">${signed(balance)}</div>
@@ -956,17 +945,11 @@ async function renderPregled() {
         <div><span class="dot" style="background:var(--tint)"></span>Troškovi<b>${money(spent)}</b></div>
       </div>
       ${balanceBody}
-    </div>` : ''}
+    </div>` : '',
 
-    ${show('budgets') ? budgetCard(m, curOf(expRows), isCurrent) : ''}
+    budgets: show('budgets') ? budgetCard(m, curOf(expRows), isCurrent) : '',
 
-    ${anyKindPart ? `
-    <div class="segmented" id="kind-switch">
-      <button type="button" data-kind="expense" class="${kind === 'expense' ? 'on' : ''}">Troškovi</button>
-      <button type="button" data-kind="income" class="${kind === 'income' ? 'on' : ''}">Prihodi</button>
-    </div>` : ''}
-
-    ${show('total') ? `
+    total: show('total') ? `
     <div class="group total">
       <div class="k">${K.totalLabel}</div>
       <div class="big ${kind === 'income' && total > 0 ? 'pos' : ''}" data-count="${total}">${money(total)}</div>
@@ -976,9 +959,9 @@ async function renderPregled() {
         <svg viewBox="0 0 ${days * 10} 96" preserveAspectRatio="none" aria-hidden="true">${bars}</svg>
         <div class="axis"><span>1.</span><span>${Math.ceil(days / 2)}.</span><span>${days}.</span></div>
       </div>
-    </div>` : ''}
+    </div>` : '',
 
-    ${catList.length && show('categories') ? `
+    categories: catList.length && show('categories') ? `
     <div class="section-title"><span>${K.breakdown}</span></div>
     <div class="group">
       ${donutChart(kind, catList, total, `${monthName(m)}`)}
@@ -990,9 +973,9 @@ async function renderPregled() {
           <span class="main"><span class="top"><span>${esc(c.label)}<span class="p">${Math.round((val / total) * 100)}%</span></span><span>${money(val)}</span></span></span>
         </button>`;
       }).join('')}
-    </div>` : ''}
+    </div>` : '',
 
-    ${accList.length && show('accounts') ? `
+    accounts: accList.length && show('accounts') ? `
     <div class="section-title"><span>Po računima</span></div>
     <div class="group">
       ${accList.map(([key, val]) => {
@@ -1006,9 +989,10 @@ async function renderPregled() {
           </span>
         </button>`;
       }).join('')}
-    </div>` : ''}
+    </div>` : '',
 
-    ${filtered ? `
+    // s uključenim filtrom (kategorija/račun) ovdje je popis filtriranih unosa, inače dnevnik
+    journal: filtered ? `
     <div class="section-title">
       <span>${K.listTitle}</span>
       <span class="chips">
@@ -1022,7 +1006,37 @@ async function renderPregled() {
       <button type="button" data-log="kalendar">Kalendar</button>
       <button type="button" data-log="popis">Popis</button>
     </div>
-    <div id="log"></div>` : ''}
+    <div id="log"></div>` : '',
+  };
+
+  // Prekidač Troškovi | Prihodi ide ispred prvog dijela koji ga koristi
+  const kindSwitch = `
+    <div class="segmented" id="kind-switch">
+      <button type="button" data-kind="expense" class="${kind === 'expense' ? 'on' : ''}">Troškovi</button>
+      <button type="button" data-kind="income" class="${kind === 'income' ? 'on' : ''}">Prihodi</button>
+    </div>`;
+  let switchPlaced = false;
+  const body = overviewOrder().map((key) => {
+    if (!parts[key]) return '';
+    if (KIND_PARTS.includes(key) && !switchPlaced) {
+      switchPlaced = true;
+      return kindSwitch + parts[key];
+    }
+    return parts[key];
+  }).join('');
+
+  const v = $('#view');
+  v.innerHTML = `
+    <div class="month-nav">
+      <button type="button" id="prev-m" aria-label="Prethodni mjesec">${CHEVRON_L}</button>
+      <span class="m">${monthName(m)} ${m.getFullYear()}.</span>
+      <button type="button" id="next-m" aria-label="Sljedeći mjesec" ${isCurrent ? 'disabled' : ''}>${CHEVRON_R}</button>
+    </div>
+
+    ${nothing ? `<div class="group empty">Svi dijelovi Pregleda su skriveni.<br>
+      <button type="button" class="btn-plain" id="go-layout">Odaberi što prikazati</button></div>` : ''}
+
+    ${body}
   `;
   $('#go-layout')?.addEventListener('click', openOverviewLayout);
 
@@ -1316,8 +1330,18 @@ const OVERVIEW_PARTS = [
   { key: 'accounts', icon: '💳', label: 'Po računima', desc: 'Koliko ide s kojeg računa', available: () => tracking() },
   { key: 'journal', icon: '🗓️', label: 'Dnevnik', desc: 'Kalendar i popis svih unosa' },
 ];
-// samo dijelovi koji imaju smisla (npr. budžeti tek kad su uključeni)
-const overviewParts = () => OVERVIEW_PARTS.filter((p) => !p.available || p.available());
+// dijelovi koji ovise o prekidaču Troškovi | Prihodi
+const KIND_PARTS = ['total', 'categories', 'accounts', 'journal'];
+// Redoslijed svih dijelova: spremljeni, a novi (koji nisu u spremljenom) na kraj
+function overviewOrder() {
+  const keys = OVERVIEW_PARTS.map((p) => p.key);
+  const saved = state.user.settings.overviewOrder.filter((k) => keys.includes(k));
+  return [...saved, ...keys.filter((k) => !saved.includes(k))];
+}
+// samo dijelovi koji imaju smisla (npr. budžeti tek kad su uključeni), po redoslijedu
+const overviewParts = () => overviewOrder()
+  .map((k) => OVERVIEW_PARTS.find((p) => p.key === k))
+  .filter((p) => !p.available || p.available());
 
 function openOverviewLayout() {
   const hidden = new Set(state.user.settings.overviewHidden);
@@ -1331,17 +1355,28 @@ function openOverviewLayout() {
         <button type="button" class="right" id="o-done">Gotovo</button>
       </div>
     </div>
-    <div class="group-header"><span>Prikaži</span></div>
-    <div class="group">
+    <div class="group-header"><span>Prikaži i poredaj</span></div>
+    <div class="group" id="layout-list">
       ${overviewParts().map((p) => `
-        <label class="row layout-row">
+        <label class="row layout-row" data-key="${p.key}">
+          <span class="handle" aria-label="Povuci za promjenu redoslijeda"><i></i><i></i><i></i></span>
           <span class="ico-sq" style="--c:var(--tint)">${p.icon}</span>
           <span class="main"><span class="t">${p.label}</span><span class="s">${p.desc}</span></span>
           <input type="checkbox" class="switch" data-key="${p.key}" ${hidden.has(p.key) ? '' : 'checked'}>
         </label>`).join('')}
     </div>
-    <div class="group-footer">Isključeni dijelovi se ne prikazuju u Pregledu. Podaci se ne brišu i uvijek ih možeš ponovno uključiti.</div>`;
+    <div class="group-footer">Povuci ≡ gore ili dolje za promjenu redoslijeda. Isključeni dijelovi se ne prikazuju u Pregledu; podaci se ne brišu i uvijek ih možeš ponovno uključiti.</div>`;
   openSheet();
+
+  wireReorder($('#layout-list'), async (visibleOrder) => {
+    // dijelovi koji se trenutno ne nude (npr. budžeti isključeni) ostaju na svom mjestu
+    let i = 0;
+    const shown = new Set(visibleOrder);
+    const order = overviewOrder().map((k) => (shown.has(k) ? visibleOrder[i++] : k));
+    try {
+      state.user.settings = await db.saveSettings({ overviewOrder: order });
+    } catch (e) { toast(errorText(e), true); }
+  });
 
   const close = () => { closeSheet(); render(); };
   $('#o-done').addEventListener('click', close);
@@ -1354,6 +1389,58 @@ function openOverviewLayout() {
       toast(errorText(e), true);
     }
   }));
+}
+
+// Promjena redoslijeda povlačenjem ručice ≡ (kao u iOS postavkama)
+function wireReorder(list, onDone) {
+  $$('.handle', list).forEach((h) => {
+    h.addEventListener('click', (e) => e.preventDefault()); // ne prebacuj prekidač u istom retku
+    h.addEventListener('pointerdown', (ev) => {
+      ev.preventDefault();
+      const row = h.closest('.layout-row');
+      const rows = $$('.layout-row', list);
+      const from = rows.indexOf(row);
+      const rects = rows.map((r) => r.getBoundingClientRect());
+      const height = rects[from].height;
+      const startY = ev.clientY;
+      const minDy = rects[0].top - rects[from].top;
+      const maxDy = rects[rects.length - 1].bottom - rects[from].bottom;
+      let to = from;
+      row.classList.add('dragging');
+      try { h.setPointerCapture(ev.pointerId); } catch { /* prst je već podignut */ }
+
+      const move = (e) => {
+        const dy = Math.max(minDy, Math.min(maxDy, e.clientY - startY));
+        row.style.transform = `translateY(${dy}px)`;
+        const center = rects[from].top + height / 2 + dy;
+        to = rects.findIndex((r) => center < r.bottom);
+        if (to < 0) to = rects.length - 1;
+        // ostali retci se razmaknu da naprave mjesta
+        rows.forEach((r, i) => {
+          if (r === row) return;
+          let shift = 0;
+          if (from < to && i > from && i <= to) shift = -height;
+          if (from > to && i >= to && i < from) shift = height;
+          r.style.transform = shift ? `translateY(${shift}px)` : '';
+        });
+      };
+      const up = () => {
+        h.removeEventListener('pointermove', move);
+        h.removeEventListener('pointerup', up);
+        h.removeEventListener('pointercancel', up);
+        row.classList.remove('dragging');
+        rows.forEach((r) => { r.style.transition = 'none'; r.style.transform = ''; });
+        if (to !== from) {
+          if (to > from) rows[to].after(row); else rows[to].before(row);
+        }
+        requestAnimationFrame(() => rows.forEach((r) => { r.style.transition = ''; }));
+        if (to !== from) onDone($$('.layout-row', list).map((r) => r.dataset.key));
+      };
+      h.addEventListener('pointermove', move);
+      h.addEventListener('pointerup', up);
+      h.addEventListener('pointercancel', up);
+    });
+  });
 }
 
 // ---------- Postavke: ponavljajući unosi ----------

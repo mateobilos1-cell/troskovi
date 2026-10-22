@@ -398,7 +398,20 @@ button.row { transition: background-color .15s; }
 }
 
 /* Prikaz kartice Pregled */
-.layout-row { --sep-left: 60px; }
+.layout-row { --sep-left: 92px; padding-left: 8px; background: var(--card); transition: transform .2s cubic-bezier(.2, .8, .3, 1); }
+.layout-row.dragging {
+  z-index: 3; transition: none; border-radius: 14px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .18); background: var(--card);
+}
+.layout-row.dragging::before, .layout-row.dragging + .layout-row::before { opacity: 0; }
+.handle {
+  flex: none; width: 32px; height: 40px; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 4px;
+  cursor: grab; touch-action: none; -webkit-user-select: none; user-select: none;
+}
+.handle i { display: block; width: 18px; height: 2px; border-radius: 1px; background: var(--text3); }
+#layout-list { overflow: visible; }
+#layout-list .layout-row:first-child { border-radius: var(--r-group) var(--r-group) 0 0; }
+#layout-list .layout-row:last-child { border-radius: 0 0 var(--r-group) var(--r-group); }
 .layout-row .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .layout-row .s { font-size: 13px; color: var(--text2); letter-spacing: -.08px; }
 
