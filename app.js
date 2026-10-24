@@ -318,11 +318,101 @@ async function boot() {
   window.addEventListener('offline', updateSyncBanner);
   db.onDataChange(onDataChanged);
 
+  wireLock();
+  faceIdAvailable().then((ok) => { state.faceId = ok; });
+
   db.onAuthChange((event, user) => {
     if (event === 'PASSWORD_RECOVERY') return showRecovery();
     setUser(user);
   });
   setUser(await db.getUser());
+}
+
+// ---------- Zaključavanje Face ID-jem ----------
+// WebAuthn (isti mehanizam kao passkeys): iPhone traži Face ID ili šifru uređaja.
+// Postavka vrijedi samo na ovom uređaju; ništa se ne šalje na server.
+const LOCK_KEY = 'fp:lock';
+const lockConf = () => { try { return JSON.parse(localStorage.getItem(LOCK_KEY)); } catch { return null; } };
+const setLockConf = (c) => {
+  try { if (c) localStorage.setItem(LOCK_KEY, JSON.stringify(c)); else localStorage.removeItem(LOCK_KEY); } catch { /* nedostupno */ }
+};
+const lockedFor = (user) => { const c = lockConf(); return !!(c && user && c.userId === user.id); };
+const b64u = {
+  enc: (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''),
+  dec: (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)), (ch) => ch.charCodeAt(0)),
+};
+const challenge = () => crypto.getRandomValues(new Uint8Array(32));
+
+async function faceIdAvailable() {
+  try {
+    return !!window.PublicKeyCredential && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+  } catch { return false; }
+}
+
+async function enableLock() {
+  const cred = await navigator.credentials.create({
+    publicKey: {
+      challenge: challenge(),
+      rp: { name: 'FinPlus' },
+      user: { id: new TextEncoder().encode(state.user.id), name: state.user.email, displayName: state.user.email },
+      pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+      authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'preferred' },
+      timeout: 60000,
+    },
+  });
+  setLockConf({ userId: state.user.id, credId: b64u.enc(cred.rawId), after: 60 });
+}
+
+async function verifyLock() {
+  const c = lockConf();
+  await navigator.credentials.get({
+    publicKey: {
+      challenge: challenge(),
+      allowCredentials: [{ type: 'public-key', id: b64u.dec(c.credId), transports: ['internal', 'hybrid'] }],
+      userVerification: 'required',
+      timeout: 60000,
+    },
+  });
+}
+
+const lockNow = () => document.documentElement.classList.add('locked');
+const unlockScreen = () => document.documentElement.classList.remove('locked');
+let unlocking = false;
+// auto = pokušaj bez dodira (iOS ga zna odbiti; tada ostaje gumb Otključaj)
+async function unlock(auto = false) {
+  if (unlocking) return;
+  unlocking = true;
+  const msg = $('#lock-msg');
+  msg.textContent = 'Otključaj Face ID-jem ili šifrom uređaja.';
+  try {
+    await verifyLock();
+    unlockScreen();
+  } catch (e) {
+    if (!auto && e?.name !== 'AbortError') msg.textContent = 'Otključavanje nije uspjelo. Pokušaj ponovno.';
+  } finally {
+    unlocking = false;
+  }
+}
+
+let hiddenAt = 0;
+function wireLock() {
+  $('#lock-open').addEventListener('click', () => unlock());
+  $('#lock-out').addEventListener('click', async () => {
+    setLockConf(null);
+    unlockScreen();
+    try { await db.signOut(); } catch (e) { toast(errorText(e), true); }
+  });
+  document.addEventListener('visibilitychange', () => {
+    const c = lockConf();
+    if (!lockedFor(state.user)) return;
+    if (document.visibilityState === 'hidden') {
+      hiddenAt = Date.now();
+      if (!c.after) lockNow(); // "Odmah": sakrij i u pregledu otvorenih aplikacija
+    } else if (Date.now() - hiddenAt >= (c.after || 0) * 1000) {
+      lockNow();
+      unlock(true);
+    }
+  });
 }
 
 // Pošalji unose koji čekaju vezu i dodaj ponavljajuće unose kojima je došao dan
@@ -372,6 +462,8 @@ function setUser(user) {
   state.user = user;
   if (same && state.started) return;
   state.started = true;
+  // zaključani zaslon samo za korisnika koji ga je uključio na ovom uređaju
+  if (lockedFor(user)) { lockNow(); unlock(true); } else unlockScreen();
   if (user) {
     $('#auth').hidden = true;
     $('#app').hidden = false;
@@ -1360,6 +1452,20 @@ function renderPostavke() {
     <div class="group-footer">Ostavi prazno za kategorije koje ne želiš pratiti.</div>` : ''}
 
 
+    <div class="group-header"><span>Sigurnost</span></div>
+    <div class="group">
+      <label class="row"><span class="label">Zaključaj Face ID-jem</span>
+        <input type="checkbox" class="switch" id="lock-toggle" ${lockedFor(state.user) ? 'checked' : ''} ${state.faceId || lockedFor(state.user) ? '' : 'disabled'}></label>
+      ${lockedFor(state.user) ? `
+      <label class="row"><span class="label">Zaključaj nakon</span>
+        <select class="pill-select" id="lock-after">
+          ${[[0, 'Odmah'], [60, '1 minute'], [300, '5 minuta'], [900, '15 minuta']].map(([s, t]) => `<option value="${s}" ${lockConf().after === s ? 'selected' : ''}>${t}</option>`).join('')}
+        </select></label>` : ''}
+    </div>
+    <div class="group-footer">${state.faceId || lockedFor(state.user)
+      ? 'Pri otvaranju aplikacije traži se Face ID ili šifra uređaja. Vrijedi samo na ovom uređaju.'
+      : 'Ovaj uređaj ili preglednik ne podržava Face ID u web aplikacijama.'}</div>
+
     <div class="group-header"><span>Korisnik</span></div>
     <div class="group">
       <div class="row"><span class="label">E-mail</span><span class="value">${esc(state.user?.email)}</span></div>
@@ -1386,6 +1492,27 @@ function renderPostavke() {
     try { await db.signOut(); } catch (e) { toast(errorText(e), true); }
   });
   $('#delete-account').addEventListener('click', openDeleteAccount);
+
+  const lt = $('#lock-toggle');
+  lt.addEventListener('change', async () => {
+    try {
+      if (lt.checked) {
+        await enableLock();
+        toast('Zaključavanje Face ID-jem je uključeno');
+      } else {
+        setLockConf(null);
+        toast('Zaključavanje je isključeno');
+      }
+    } catch (e) {
+      lt.checked = !lt.checked;
+      if (e?.name !== 'NotAllowedError' && e?.name !== 'AbortError') toast('Face ID nije uspio: ' + (e?.message || e), true);
+    }
+    renderPostavke();
+  });
+  $('#lock-after')?.addEventListener('change', (e) => {
+    setLockConf({ ...lockConf(), after: Number(e.target.value) });
+    toast('Spremljeno');
+  });
 
   const toggle = $('#track-toggle');
   toggle.addEventListener('change', async () => {

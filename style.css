@@ -457,6 +457,19 @@ button.row { transition: background-color .15s; }
 }
 #add-form > .btn-filled.green { box-shadow: 0 6px 18px color-mix(in srgb, var(--green) 30%, transparent); }
 
+/* Zaključani zaslon (Face ID) */
+#lock { display: none; }
+html.locked #lock {
+  position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px; padding: 24px 32px calc(24px + env(safe-area-inset-bottom)); text-align: center;
+  background: var(--bg);
+}
+html.locked #app, html.locked #auth, html.locked #sheet, html.locked #sheet-backdrop { visibility: hidden; }
+#lock img { width: 76px; height: 76px; border-radius: 18px; box-shadow: 0 4px 14px rgba(0, 0, 0, .15); margin-bottom: 10px; }
+#lock h2 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: .35px; }
+#lock p { margin: 0 0 18px; color: var(--text2); font-size: 15px; letter-spacing: -.24px; }
+#lock .btn-filled { max-width: 280px; }
+
 /* Brisanje računa */
 .danger-hero { text-align: center; margin: 4px 16px 16px; }
 .danger-ico { font-size: 40px; }

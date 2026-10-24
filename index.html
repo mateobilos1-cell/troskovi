@@ -18,6 +18,8 @@
 
   <link rel="stylesheet" href="style.css">
   <script type="module" src="app.js"></script>
+  <!-- Ako je uključeno zaključavanje, sakrij sadržaj prije nego se išta prikaže -->
+  <script>try { if (localStorage.getItem('fp:lock')) document.documentElement.classList.add('locked'); } catch (e) {}</script>
 </head>
 <body>
   <div id="demo-banner">Demo način — podaci se spremaju samo u ovom pregledniku</div>
@@ -54,6 +56,15 @@
   <!-- Donji prozor za uređivanje troška -->
   <div id="sheet-backdrop" hidden></div>
   <section id="sheet" hidden></section>
+
+  <!-- Zaključani zaslon (Face ID) -->
+  <div id="lock" role="dialog" aria-label="FinPlus je zaključan">
+    <img src="icons/icon-192.png" alt="">
+    <h2>FinPlus je zaključan</h2>
+    <p id="lock-msg">Otključaj Face ID-jem ili šifrom uređaja.</p>
+    <button type="button" class="btn-filled" id="lock-open">Otključaj</button>
+    <button type="button" class="btn-plain" id="lock-out">Odjavi se</button>
+  </div>
 
   <div id="toast" role="status" aria-live="polite"></div>
 </body>
