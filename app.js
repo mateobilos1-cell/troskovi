@@ -606,26 +606,27 @@ function entryFields(kind, { amount = '', category = null, note = '', date = tod
   // Kompaktni obrazac (novi unos): datum, račun i ponavljanje su čipovi u jednom retku,
   // a dodir na čip otvara iOS izbornik (datum/račun) ili ga uključuje (ponavljanje).
   if (compact) {
-    const accChip = !tracking() ? ''
-      : state.accounts.length
-        ? `<label class="chip"><span class="chip-ico">💳</span><span class="chip-txt acc-txt">${esc(accChipText(account))}</span>
+    // traka podijeljena na jednake dijelove (2 ili 3), uvijek u jednom redu
+    const cells = [`
+      <label class="opt"><span class="opt-k">Datum</span><span class="opt-v date-txt">${dateChipText(date)}</span>
+        <input class="date chip-input" type="date" value="${date}" max="${today()}" aria-label="Datum"></label>`];
+    if (tracking()) {
+      cells.push(state.accounts.length
+        ? `<label class="opt"><span class="opt-k">Račun</span><span class="opt-v acc-txt">${esc(accChipText(account))}</span>
             <select class="account chip-input" aria-label="Račun"><option value="">Bez računa</option>
             ${state.accounts.map((a) => `<option value="${a.id}" ${a.id === account ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select></label>`
-        : '<button type="button" class="chip go-accounts"><span class="chip-ico">💳</span><span class="chip-txt">Dodaj račun</span></button>';
-    const repeatChip = repeat && state.recurringReady
-      ? '<button type="button" class="chip repeat-chip" aria-pressed="false"><span class="chip-ico">↻</span><span class="chip-txt">Svaki mjesec</span></button><input type="checkbox" class="repeat" hidden>'
-      : '';
+        : '<button type="button" class="opt go-accounts"><span class="opt-k">Račun</span><span class="opt-v">Dodaj</span></button>');
+    }
+    if (repeat && state.recurringReady) {
+      cells.push(`<button type="button" class="opt repeat-chip" aria-pressed="false"><span class="opt-k">Ponavljanje</span><span class="opt-v rep-txt">Ne</span></button>
+        <input type="checkbox" class="repeat" hidden>`);
+    }
     return `
       ${amountGroup(kind, amount)}
       <div class="group"><div class="cats">${catButtons(kind, category)}</div></div>
       <div class="group">
         <label class="row"><input class="row-input note" placeholder="Bilješka (neobavezno)" maxlength="100" value="${esc(note)}" autocomplete="off"></label>
-        <div class="row chips-row">
-          <label class="chip"><span class="chip-ico">📅</span><span class="chip-txt date-txt">${dateChipText(date)}</span>
-            <input class="date chip-input" type="date" value="${date}" max="${today()}" aria-label="Datum"></label>
-          ${accChip}
-          ${repeatChip}
-        </div>
+        <div class="opt-bar" style="--n:${cells.length}">${cells.join('')}</div>
       </div>`;
   }
   return `
@@ -655,14 +656,14 @@ function readFields(form) {
 function wireFields(form) {
   wireAmount($('.amount', form));
   $('.go-accounts', form)?.addEventListener('click', () => { closeSheet(); go('postavke'); });
-  // čipovi kompaktnog obrasca
-  const date = $('.chip .date', form);
+  // traka kompaktnog obrasca (datum, račun, ponavljanje)
+  const date = $('.opt .date', form);
   date?.addEventListener('change', () => {
     if (!date.value) date.value = today();
     $('.date-txt', form).textContent = dateChipText(date.value);
-    date.closest('.chip').classList.toggle('set', date.value !== today());
+    date.closest('.opt').classList.toggle('set', date.value !== today());
   });
-  const acc = $('.chip .account', form);
+  const acc = $('.opt .account', form);
   acc?.addEventListener('change', () => { $('.acc-txt', form).textContent = accChipText(acc.value); });
   const rep = $('.repeat-chip', form);
   rep?.addEventListener('click', () => {
@@ -670,6 +671,7 @@ function wireFields(form) {
     box.checked = !box.checked;
     rep.classList.toggle('set', box.checked);
     rep.setAttribute('aria-pressed', String(box.checked));
+    $('.rep-txt', form).textContent = box.checked ? 'Mjesečno' : 'Ne';
   });
 }
 
