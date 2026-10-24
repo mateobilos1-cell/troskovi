@@ -415,6 +415,38 @@ button.row { transition: background-color .15s; }
 .layout-row .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .layout-row .s { font-size: 13px; color: var(--text2); letter-spacing: -.08px; }
 
+/* ---------- Kompaktni obrazac za unos ---------- */
+#add-form .group { margin-bottom: 12px; }
+#add-form .amount-group { padding: 6px 16px 4px; }
+#add-form .amount-line input { font-size: 48px; }
+#add-form .amount-line .cur { font-size: 30px; }
+#add-form .cats { gap: 8px 4px; padding: 10px 8px 8px; }
+#add-form .cat { gap: 4px; }
+#add-form .cat .sq { width: 44px; height: 44px; border-radius: 13px; font-size: 23px; }
+.chips-row { gap: 8px; flex-wrap: wrap; padding-top: 10px; padding-bottom: 10px; }
+.chip {
+  position: relative; display: inline-flex; align-items: center; gap: 5px; max-width: 100%;
+  border: 0; border-radius: 999px; padding: 7px 12px; background: var(--fill);
+  font-size: 15px; letter-spacing: -.24px; color: var(--text); cursor: pointer;
+  transition: background-color .15s, color .15s;
+}
+.chip:active { transform: scale(.96); }
+.chip-ico { font-size: 14px; }
+.chip-txt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px; }
+.chip.set { background: color-mix(in srgb, var(--tint) 16%, var(--card)); color: var(--tint); font-weight: 600; }
+/* nevidljivi izbornik preko čipa: dodir otvara iOS kalendar ili popis računa */
+.chip-input {
+  position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; border: 0; margin: 0; cursor: pointer;
+  -webkit-appearance: none; appearance: none; font-size: 16px;
+}
+/* gumb Spremi ostaje vidljiv iznad donje trake i na manjim ekranima */
+#add-form > .btn-filled {
+  position: sticky; z-index: 4;
+  bottom: calc(var(--tabbar-h) + max(10px, env(safe-area-inset-bottom)) + 10px);
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--tint) 30%, transparent);
+}
+#add-form > .btn-filled.green { box-shadow: 0 6px 18px color-mix(in srgb, var(--green) 30%, transparent); }
+
 /* Vlastite kategorije */
 #cat-list { overflow: visible; }
 #cat-list .layout-row:first-child { border-radius: var(--r-group) var(--r-group) 0 0; }

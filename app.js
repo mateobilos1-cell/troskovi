@@ -589,7 +589,45 @@ function amountGroup(kind, amount) {
     </div>`;
 }
 
-function entryFields(kind, { amount = '', category = null, note = '', date = today(), account = null, repeat = false } = {}) {
+// Kratki tekstovi za "čipove" ispod bilješke
+const dateChipText = (iso) => {
+  if (iso === today()) return 'Danas';
+  const [, mm, dd] = iso.split('-').map(Number);
+  return dayLabel(iso) === 'Jučer' ? 'Jučer' : `${dd}. ${mm}.`;
+};
+// dugi naziv računa → kratica (npr. "Zagrebačka banka" → "ZABA"), da čipovi stanu u jedan red
+const accChipText = (id) => {
+  const a = accById(id);
+  if (!a) return 'Bez računa';
+  return a.name.length > 12 && /\p{L}{2,}/u.test(a.short || '') ? a.short : a.name;
+};
+
+function entryFields(kind, { amount = '', category = null, note = '', date = today(), account = null, repeat = false, compact = false } = {}) {
+  // Kompaktni obrazac (novi unos): datum, račun i ponavljanje su čipovi u jednom retku,
+  // a dodir na čip otvara iOS izbornik (datum/račun) ili ga uključuje (ponavljanje).
+  if (compact) {
+    const accChip = !tracking() ? ''
+      : state.accounts.length
+        ? `<label class="chip"><span class="chip-ico">💳</span><span class="chip-txt acc-txt">${esc(accChipText(account))}</span>
+            <select class="account chip-input" aria-label="Račun"><option value="">Bez računa</option>
+            ${state.accounts.map((a) => `<option value="${a.id}" ${a.id === account ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select></label>`
+        : '<button type="button" class="chip go-accounts"><span class="chip-ico">💳</span><span class="chip-txt">Dodaj račun</span></button>';
+    const repeatChip = repeat && state.recurringReady
+      ? '<button type="button" class="chip repeat-chip" aria-pressed="false"><span class="chip-ico">↻</span><span class="chip-txt">Svaki mjesec</span></button><input type="checkbox" class="repeat" hidden>'
+      : '';
+    return `
+      ${amountGroup(kind, amount)}
+      <div class="group"><div class="cats">${catButtons(kind, category)}</div></div>
+      <div class="group">
+        <label class="row"><input class="row-input note" placeholder="Bilješka (neobavezno)" maxlength="100" value="${esc(note)}" autocomplete="off"></label>
+        <div class="row chips-row">
+          <label class="chip"><span class="chip-ico">📅</span><span class="chip-txt date-txt">${dateChipText(date)}</span>
+            <input class="date chip-input" type="date" value="${date}" max="${today()}" aria-label="Datum"></label>
+          ${accChip}
+          ${repeatChip}
+        </div>
+      </div>`;
+  }
   return `
     ${amountGroup(kind, amount)}
     <div class="group"><div class="cats">${catButtons(kind, category)}</div></div>
@@ -617,6 +655,22 @@ function readFields(form) {
 function wireFields(form) {
   wireAmount($('.amount', form));
   $('.go-accounts', form)?.addEventListener('click', () => { closeSheet(); go('postavke'); });
+  // čipovi kompaktnog obrasca
+  const date = $('.chip .date', form);
+  date?.addEventListener('change', () => {
+    if (!date.value) date.value = today();
+    $('.date-txt', form).textContent = dateChipText(date.value);
+    date.closest('.chip').classList.toggle('set', date.value !== today());
+  });
+  const acc = $('.chip .account', form);
+  acc?.addEventListener('change', () => { $('.acc-txt', form).textContent = accChipText(acc.value); });
+  const rep = $('.repeat-chip', form);
+  rep?.addEventListener('click', () => {
+    const box = $('.repeat', form);
+    box.checked = !box.checked;
+    rep.classList.toggle('set', box.checked);
+    rep.setAttribute('aria-pressed', String(box.checked));
+  });
 }
 
 function itemRow(kind, r, showDate = false) {
@@ -646,7 +700,7 @@ async function renderEntry(kind) {
   // Forma se prikaže odmah; brojke i zadnji unosi stignu kad se učitaju.
   v.innerHTML = `
     <form id="add-form" novalidate>
-      ${entryFields(kind, { category: state.pick[kind], account: accById(state.user.settings.defaultAccount)?.id, repeat: true })}
+      ${entryFields(kind, { category: state.pick[kind], account: accById(state.user.settings.defaultAccount)?.id, repeat: true, compact: true })}
       <button class="btn-filled ${kind === 'income' ? 'green' : ''}" type="submit">Spremi</button>
     </form>
     <div id="entry-extra"></div>`;
