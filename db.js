@@ -252,6 +252,11 @@ const cols = (dateCol) => `id, amount, category, note, ${dateCol}, created_at`
 const ACC_COLS = 'id, name, short, color, created_at';
 const REC_COLS = 'id, kind, amount, category, note, account_id, day, start_month, last_month, active, created_at';
 const normRec = (r) => ({ ...r, amount: Number(r.amount) });
+const GOAL_COLS = 'id, name, icon, color, target, deadline, created_at';
+const DEP_COLS = 'id, goal_id, amount, date, note, created_at';
+const normGoal = (g, deps = []) => ({
+  ...g, target: Number(g.target), saved: Math.round(deps.reduce((s, d) => s + Number(d.amount), 0) * 100) / 100,
+});
 
 const supa = {
   async list(kind, from, to) {
@@ -292,6 +297,19 @@ const supa = {
   addRecurring: async (r) => normRec(check(await sb.from('recurring').insert(r).select(REC_COLS).single())),
   async updateRecurring(id, r) { check(await sb.from('recurring').update(r).eq('id', id)); },
   async removeRecurring(id) { check(await sb.from('recurring').delete().eq('id', id)); },
+  // ciljevi štednje; saved = zbroj uplata
+  async goals() {
+    const rows = check(await sb.from('goals').select(`${GOAL_COLS}, goal_deposits(amount)`).order('created_at'));
+    return rows.map(({ goal_deposits: deps, ...g }) => normGoal(g, deps));
+  },
+  addGoal: async (g) => normGoal(check(await sb.from('goals').insert(g).select(GOAL_COLS).single()), []),
+  async updateGoal(id, g) { check(await sb.from('goals').update(g).eq('id', id)); },
+  async removeGoal(id) { check(await sb.from('goals').delete().eq('id', id)); },
+  deposits: async (goalId) => check(await sb.from('goal_deposits').select(DEP_COLS).eq('goal_id', goalId)
+    .order('date', { ascending: false }).order('created_at', { ascending: false }).limit(100))
+    .map((d) => ({ ...d, amount: Number(d.amount) })),
+  async addDeposit(d) { check(await sb.from('goal_deposits').insert(d)); },
+  async removeDeposit(id) { check(await sb.from('goal_deposits').delete().eq('id', id)); },
 };
 
 // ---------- Javne funkcije (spremanje na uređaj + mreža) ----------
@@ -371,6 +389,15 @@ export async function addRecurring(r) { const x = await R.addRecurring(r); touch
 export async function updateRecurring(id, r) { await R.updateRecurring(id, r); touch(); }
 export async function removeRecurring(id) { await R.removeRecurring(id); touch(); }
 
+// Ciljevi štednje i uplate (goals.sql)
+export const listGoals = () => cached('goals', () => R.goals());
+export async function addGoal(g) { const x = await R.addGoal(g); touch(); return x; }
+export async function updateGoal(id, g) { await R.updateGoal(id, g); touch(); }
+export async function removeGoal(id) { await R.removeGoal(id); touch(); }
+export const listDeposits = (goalId) => cached(`deposits:${goalId}`, () => R.deposits(goalId));
+export async function addDeposit(d) { await R.addDeposit(d); touch(); }
+export async function removeDeposit(id) { await R.removeDeposit(id); touch(); }
+
 // ---------- Demo način ----------
 
 const demo = (() => {
@@ -384,6 +411,8 @@ const demo = (() => {
     mem ||= { user: null, items: [] };
     mem.accounts ||= [];
     mem.recurring ||= [];
+    mem.goals ||= [];
+    mem.deposits ||= [];
     // stari demo format (samo troškovi)
     if (mem.rows) {
       mem.items = mem.rows.map(({ spent_at, ...r }) => ({ ...r, kind: 'expense', date: spent_at }));
@@ -455,8 +484,25 @@ const demo = (() => {
       save(); emit('SIGNED_IN');
     },
     signOut() { load(); mem.user = null; save(); emit('SIGNED_OUT'); },
+    goals: () => copy(load().goals.map((g) => normGoal(g, mem.deposits.filter((d) => d.goal_id === g.id)))),
+    addGoal(g) {
+      const row = { id: uid(), icon: '🎯', color: '#007AFF', deadline: null, created_at: new Date().toISOString(), ...g };
+      load().goals.push(row); save();
+      return normGoal(copy(row), []);
+    },
+    updateGoal(id, g) { const x = load().goals.find((y) => y.id === id); if (x) Object.assign(x, g); save(); },
+    removeGoal(id) {
+      load();
+      mem.goals = mem.goals.filter((x) => x.id !== id);
+      mem.deposits = mem.deposits.filter((d) => d.goal_id !== id);
+      save();
+    },
+    deposits: (goalId) => copy(load().deposits.filter((d) => d.goal_id === goalId)
+      .sort((a, b) => b.date.localeCompare(a.date) || b.created_at.localeCompare(a.created_at))),
+    addDeposit(d) { load().deposits.push({ id: uid(), note: null, created_at: new Date().toISOString(), ...d }); save(); },
+    removeDeposit(id) { load(); mem.deposits = mem.deposits.filter((d) => d.id !== id); save(); },
     deleteAll() {
-      mem = { user: null, items: [], accounts: [], recurring: [] };
+      mem = { user: null, items: [], accounts: [], recurring: [], goals: [], deposits: [] };
       save(); emit('SIGNED_OUT');
     },
     saveSettings(meta) {
@@ -516,7 +562,8 @@ const demo = (() => {
 
 // U demo načinu se gubitak veze može isprobati: localStorage 'fp-demo-offline' = '1' ili isključen internet
 const DATA_OPS = ['list', 'recent', 'insert', 'update', 'remove', 'addRecurringEntries', 'accounts', 'addAccount',
-  'updateAccount', 'removeAccount', 'recurring', 'addRecurring', 'updateRecurring', 'removeRecurring'];
+  'updateAccount', 'removeAccount', 'recurring', 'addRecurring', 'updateRecurring', 'removeRecurring',
+  'goals', 'addGoal', 'updateGoal', 'removeGoal', 'deposits', 'addDeposit', 'removeDeposit'];
 const demoRemote = Object.fromEntries(DATA_OPS.map((op) => [op, async (...args) => {
   await new Promise((r) => setTimeout(r, 120)); // kao da ide preko mreže
   if (!navigator.onLine || localStorage.getItem('fp-demo-offline') === '1') throw new TypeError('Failed to fetch');

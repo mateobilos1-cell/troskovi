@@ -175,6 +175,7 @@ function errorText(e) {
   if (/rate limit|too many/i.test(msg)) return 'Previše pokušaja. Pričekaj malo pa pokušaj ponovno.';
   if (db.isNetworkError(e)) return 'Nema veze s internetom.';
   if (code === 'PGRST202' || /delete_my_account/.test(msg)) return 'Brisanje računa još nije uključeno — pokreni supabase/delete-account.sql u Supabaseu.';
+  if (isMissingTable(e) && /goal/.test(msg)) return 'Tablica za ciljeve još ne postoji — pokreni supabase/goals.sql u Supabaseu.';
   if (isMissingTable(e) && /accounts|account_id/.test(msg)) return 'Tablica za račune još ne postoji — pokreni supabase/accounts.sql u Supabaseu.';
   if (isMissingTable(e)) return 'Tablica za prihode još ne postoji — pokreni supabase/incomes.sql u Supabaseu.';
   return msg || 'Nešto je pošlo po zlu.';
@@ -959,6 +960,258 @@ async function budgetHint(category, date) {
     : { text: `${label}: ${money(-left)} preko budžeta!`, over: true };
 }
 
+// ---------- Ciljevi štednje ----------
+const GOAL_EMOJI = ['🎯', '🏖️', '✈️', '🚗', '🏠', '💍', '🎓', '💻', '📱', '🎁', '🛟', '🏦', '👶', '🐶', '🎸', '⛷️'];
+const goalColor = (g) => (/^#[0-9a-f]{6}$/i.test(g.color || '') ? g.color : '#007AFF');
+// "do lipnja 2027." — mjesec u genitivu
+const MONTHS_GEN = ['siječnja', 'veljače', 'ožujka', 'travnja', 'svibnja', 'lipnja',
+  'srpnja', 'kolovoza', 'rujna', 'listopada', 'studenoga', 'prosinca'];
+const monthLabel = (iso) => { const [y, m] = iso.split('-').map(Number); return `${MONTHS_GEN[m - 1]} ${y}.`; };
+
+// Koliko je ostalo i koliko mjesečno treba odvajati do roka
+function goalStatus(g) {
+  const left = Math.max(g.target - g.saved, 0);
+  const done = g.saved >= g.target;
+  let perMonth = null;
+  let late = false;
+  if (g.deadline && !done) {
+    const now = monthStart(new Date());
+    const dl = parseIso(g.deadline);
+    const months = (dl.getFullYear() - now.getFullYear()) * 12 + dl.getMonth() - now.getMonth() + 1;
+    if (months <= 0) late = true; else perMonth = left / months;
+  }
+  return { left, done, perMonth, late, pct: Math.max(0, Math.min((g.saved / g.target) * 100, 100)) };
+}
+
+function goalLine(g, s) {
+  if (s.done) return '🎉 Cilj je postignut';
+  const parts = [`još ${money(s.left)}`];
+  if (s.late) parts.push('rok je prošao');
+  else if (s.perMonth != null) parts.push(`~${money(s.perMonth)} mjesečno do ${monthLabel(g.deadline)}`);
+  return parts.join(' · ');
+}
+
+function goalsSection(goals, err) {
+  const head = `<div class="section-title"><span>Ciljevi štednje</span>${err ? '' : '<button type="button" class="filter-chip" id="goal-add">+ Novi cilj</button>'}</div>`;
+  if (err) return `${head}<div class="group empty">${esc(errorText(err))}</div>`;
+  if (!goals.length) {
+    return `${head}<div class="group empty">Štediš za nešto? Postavi cilj i prati koliko ti još nedostaje.<br>
+      <button type="button" class="btn-plain" id="goal-first">Dodaj prvi cilj</button></div>`;
+  }
+  return `${head}<div class="group">${goals.map((g) => {
+    const s = goalStatus(g);
+    return `
+      <button type="button" class="row cat-row goal-row" data-id="${g.id}" style="--c:${goalColor(g)}">
+        <span class="ico-sq">${esc(g.icon)}</span>
+        <span class="main">
+          <span class="top"><span>${esc(g.name)}</span><span><b>${money(g.saved)}</b><span class="p">od ${money(g.target)}</span></span></span>
+          <span class="bar"><i style="width:${s.pct}%"></i></span>
+          <span class="g-note ${s.done ? 'pos' : s.late ? 'neg' : ''}">${goalLine(g, s)}</span>
+        </span>
+      </button>`;
+  }).join('')}</div>`;
+}
+
+// Najsvježiji podaci o cilju (nakon uplate ili promjene)
+async function freshGoal(id) {
+  return (await db.listGoals()).find((g) => g.id === id);
+}
+
+function goalRing(pct) {
+  const r = 54;
+  const c = 2 * Math.PI * r;
+  return `<svg viewBox="0 0 132 132" class="goal-ring" aria-hidden="true">
+    <circle cx="66" cy="66" r="${r}" class="gr-track"/>
+    <circle cx="66" cy="66" r="${r}" class="gr-fill" stroke-dasharray="${(pct / 100) * c} ${c}" transform="rotate(-90 66 66)"/>
+  </svg>`;
+}
+
+async function openGoal(g) {
+  if (!g) return;
+  const s = goalStatus(g);
+  const sheet = $('#sheet');
+  sheet.innerHTML = `
+    <div class="sheet-bar">
+      <div class="grab"></div>
+      <div class="bar-row">
+        <button type="button" class="left" id="g-close">Zatvori</button>
+        <h2>${esc(g.name)}</h2>
+        <button type="button" class="right" id="g-edit">Uredi</button>
+      </div>
+    </div>
+    <div class="goal-hero" style="--c:${goalColor(g)}">
+      <div class="gh-ring">${goalRing(s.pct)}<span class="gh-ico">${esc(g.icon)}</span></div>
+      <div class="gh-amt">${money(g.saved)}</div>
+      <div class="gh-sub">od ${money(g.target)} · ${Math.round((g.saved / g.target) * 100)} %</div>
+      <div class="gh-line ${s.done ? 'pos' : s.late ? 'neg' : ''}">${goalLine(g, s)}</div>
+    </div>
+    <div class="goal-actions">
+      <button type="button" class="btn-filled green" id="g-in">Uplati</button>
+      <button type="button" class="btn-filled soft" id="g-out" ${g.saved > 0 ? '' : 'disabled'}>Podigni</button>
+    </div>
+    <div class="group-header"><span>Povijest uplata</span></div>
+    <div class="group" id="g-history"><div class="empty">Učitavam…</div></div>`;
+  openSheet();
+
+  $('#g-close').addEventListener('click', () => { closeSheet(); render(); });
+  $('#g-edit').addEventListener('click', () => openGoalEdit(g));
+  $('#g-in').addEventListener('click', () => openDeposit(g, 1));
+  $('#g-out').addEventListener('click', () => openDeposit(g, -1));
+
+  try {
+    const deps = await db.listDeposits(g.id);
+    const box = $('#g-history');
+    if (!box) return;
+    box.innerHTML = deps.length ? deps.map((d) => `
+      <button type="button" class="row dep-row" data-id="${d.id}">
+        <span class="main"><span class="t">${dayLabel(d.date)}</span>${d.note ? `<span class="s">${esc(d.note)}</span>` : ''}</span>
+        <span class="amt ${d.amount > 0 ? 'pos' : 'neg'}">${signed(d.amount)}</span>
+      </button>`).join('')
+      : '<div class="empty">Još nema uplata. Dodirni Uplati kad odvojiš novac za ovaj cilj.</div>';
+    $$('.dep-row', box).forEach((b) => b.addEventListener('click', async () => {
+      const d = deps.find((x) => x.id === b.dataset.id);
+      if (!confirm(`Obrisati ${d.amount > 0 ? 'uplatu' : 'podizanje'} ${signed(d.amount)} (${dayLabel(d.date)})?`)) return;
+      try {
+        await db.removeDeposit(d.id);
+        toast('Obrisano');
+        openGoal(await freshGoal(g.id));
+      } catch (e) { toast(errorText(e), true); }
+    }));
+  } catch (e) {
+    const box = $('#g-history');
+    if (box) box.innerHTML = `<div class="empty">${esc(errorText(e))}</div>`;
+  }
+}
+
+// Uplata (sign = 1) ili podizanje (sign = -1)
+function openDeposit(g, sign) {
+  const sheet = $('#sheet');
+  sheet.innerHTML = `
+    <div class="sheet-bar">
+      <div class="grab"></div>
+      <div class="bar-row">
+        <button type="button" class="left" id="d-back">Natrag</button>
+        <h2>${sign > 0 ? 'Uplata' : 'Podizanje'} · ${esc(g.name)}</h2>
+        <button type="submit" class="right" form="dep-form">Spremi</button>
+      </div>
+    </div>
+    <form id="dep-form" novalidate>
+      ${amountGroup(sign > 0 ? 'income' : 'expense', '')}
+      <div class="group">
+        <label class="row"><input class="row-input note" placeholder="Bilješka (neobavezno)" maxlength="100" autocomplete="off"></label>
+        <label class="row"><span class="label">Datum</span><input class="pill-date date" type="date" value="${today()}" max="${today()}" aria-label="Datum"></label>
+      </div>
+      <div class="group-footer">${sign > 0
+        ? `Do cilja nedostaje još ${money(Math.max(g.target - g.saved, 0))}.`
+        : `Za ovaj cilj je uplaćeno ${money(g.saved)}.`} Uplate su odvojene od troškova i ne ulaze u bilancu.</div>
+    </form>`;
+  openSheet();
+
+  const form = $('#dep-form');
+  wireAmount($('.amount', form));
+  $('#d-back').addEventListener('click', () => openGoal(g));
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const amount = parseAmount($('.amount', form).value);
+    if (!(amount > 0)) return toast('Upiši iznos', true);
+    if (sign < 0 && amount > g.saved) return toast(`Možeš podići najviše ${money(g.saved)}`, true);
+    try {
+      await db.addDeposit({
+        goal_id: g.id, amount: sign * amount,
+        date: $('.date', form).value || today(), note: $('.note', form).value.trim() || null,
+      });
+      const updated = await freshGoal(g.id);
+      if (sign > 0 && updated && updated.saved >= updated.target && g.saved < g.target) toast(`🎉 Cilj „${updated.name}" je postignut!`);
+      else toast(sign > 0 ? `${money(amount)} uplaćeno` : `${money(amount)} podignuto`);
+      openGoal(updated);
+    } catch (e) { toast(errorText(e), true); }
+  });
+}
+
+// Novi (g = null) ili postojeći cilj: naziv, ikona, boja, iznos, rok
+function openGoalEdit(g) {
+  const isNew = !g;
+  let icon = g?.icon || '🎯';
+  let color = g ? goalColor(g) : CAT_COLORS.at(6);
+  const sheet = $('#sheet');
+  sheet.innerHTML = `
+    <div class="sheet-bar">
+      <div class="grab"></div>
+      <div class="bar-row">
+        <button type="button" class="left" id="ge-back">${isNew ? 'Odustani' : 'Natrag'}</button>
+        <h2>${isNew ? 'Novi cilj' : 'Uredi cilj'}</h2>
+        <button type="submit" class="right" form="goal-form">Spremi</button>
+      </div>
+    </div>
+    <form id="goal-form" novalidate>
+      <div class="cat-preview"><span class="sq" id="ge-preview"></span></div>
+      <div class="group">
+        <label class="row"><input class="row-input" id="ge-name" placeholder="Naziv (npr. Ljetovanje)" maxlength="40" value="${esc(g?.name)}" autocomplete="off"></label>
+      </div>
+      <div class="group-header"><span>Koliko želiš uštedjeti</span></div>
+      ${amountGroup('expense', g ? String(g.target).replace('.', ',') : '')}
+      <div class="group">
+        <label class="row"><span class="label">Rok (neobavezno)</span>
+          <input class="pill-date" id="ge-deadline" type="month" value="${g?.deadline ? g.deadline.slice(0, 7) : ''}" aria-label="Rok"></label>
+      </div>
+      <div class="group-footer">S rokom ti aplikacija računa koliko trebaš odvajati svaki mjesec.</div>
+      <div class="group-header"><span>Ikona</span></div>
+      <div class="group"><div class="emoji-grid">${GOAL_EMOJI.map((e) => `<button type="button" class="emoji-opt" data-e="${e}">${e}</button>`).join('')}</div></div>
+      <div class="group-header"><span>Boja</span></div>
+      <div class="group"><div class="row colors">
+        ${CAT_COLORS.map((x) => `<button type="button" class="color-dot" data-c="${x}" style="--c:${x}" aria-label="Boja"></button>`).join('')}
+      </div></div>
+      ${isNew ? '' : '<div class="group"><button type="button" class="row center destructive" id="ge-del">Obriši cilj</button></div>'}
+    </form>`;
+  openSheet();
+
+  const form = $('#goal-form');
+  wireAmount($('.amount', form));
+  const refresh = () => {
+    const p = $('#ge-preview');
+    p.textContent = icon;
+    p.style.setProperty('--c', color);
+    $$('.emoji-opt', form).forEach((b) => b.classList.toggle('on', b.dataset.e === icon));
+    $$('.color-dot', form).forEach((d) => d.classList.toggle('on', d.dataset.c === color));
+  };
+  refresh();
+  $$('.emoji-opt', form).forEach((b) => b.addEventListener('click', () => { icon = b.dataset.e; refresh(); }));
+  $$('.color-dot', form).forEach((d) => d.addEventListener('click', () => { color = d.dataset.c; refresh(); }));
+  $('#ge-back').addEventListener('click', () => (isNew ? (closeSheet(), render()) : openGoal(g)));
+
+  $('#ge-del')?.addEventListener('click', async () => {
+    if (!confirm(`Obrisati cilj „${g.name}" i svu povijest uplata?`)) return;
+    try {
+      await db.removeGoal(g.id);
+      closeSheet();
+      toast('Cilj obrisan');
+      render();
+    } catch (e) { toast(errorText(e), true); }
+  });
+
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const name = $('#ge-name').value.trim();
+    if (!name) { $('#ge-name').focus(); return toast('Upiši naziv cilja', true); }
+    const target = parseAmount($('.amount', form).value);
+    if (!(target > 0)) return toast('Upiši koliko želiš uštedjeti', true);
+    const month = $('#ge-deadline').value;
+    const data = { name, icon, color, target, deadline: /^\d{4}-\d{2}$/.test(month) ? `${month}-01` : null };
+    try {
+      if (isNew) {
+        await db.addGoal(data);
+        closeSheet();
+        toast('Cilj dodan');
+        render();
+      } else {
+        await db.updateGoal(g.id, data);
+        toast('Promjene spremljene');
+        openGoal(await freshGoal(g.id));
+      }
+    } catch (e) { toast(errorText(e), true); }
+  });
+}
+
 // ---------- Prsten (donut) po kategorijama ----------
 const DONUT = { r: 80, w: 22, gap: 3 };
 const DONUT_C = 2 * Math.PI * DONUT.r;
@@ -1025,10 +1278,13 @@ async function renderPregled() {
   const from = isoDate(prev);
   const to = isoDate(addMonths(m, 1));
   let incomeError = null;
-  const [expRows, incRows] = await Promise.all([
+  let goalsError = null;
+  const wantGoals = !state.user.settings.overviewHidden.includes('goals');
+  const [expRows, incRows, goals] = await Promise.all([
     db.list('expense', from, to),
     // ako tablica za prihode još nije napravljena, pregled troškova i dalje radi
     db.list('income', from, to).catch((e) => { incomeError = e; return []; }),
+    wantGoals ? db.listGoals().catch((e) => { goalsError = e; return []; }) : [],
   ]);
   if (state.view !== 'pregled') return;
 
@@ -1139,6 +1395,8 @@ async function renderPregled() {
 
     budgets: show('budgets') ? budgetCard(m, curOf(expRows), isCurrent) : '',
 
+    goals: show('goals') ? goalsSection(goals, goalsError) : '',
+
     total: show('total') ? `
     <div class="group total">
       <div class="k">${K.totalLabel}</div>
@@ -1229,6 +1487,8 @@ async function renderPregled() {
     ${body}
   `;
   $('#go-layout')?.addEventListener('click', openOverviewLayout);
+  $$('#goal-add, #goal-first', v).forEach((b) => b.addEventListener('click', () => openGoalEdit(null)));
+  $$('.goal-row', v).forEach((b) => b.addEventListener('click', () => openGoal(goals.find((g) => g.id === b.dataset.id))));
 
   const resetFilters = () => { state.filterCat = null; state.filterAcc = null; };
   $('#prev-m').addEventListener('click', () => changeMonth(-1));
@@ -1572,7 +1832,8 @@ function renderPostavke() {
 // ---------- Postavke: prikaz kartice Pregled ----------
 const OVERVIEW_PARTS = [
   { key: 'balance', icon: '⚖️', label: 'Bilanca', desc: 'Prihodi minus troškovi u mjesecu' },
-  { key: 'budgets', icon: '🎯', label: 'Budžeti', desc: 'Koliko ti je ostalo do limita', available: () => budgeting() },
+  { key: 'budgets', icon: '📏', label: 'Budžeti', desc: 'Koliko ti je ostalo do limita', available: () => budgeting() },
+  { key: 'goals', icon: '🎯', label: 'Ciljevi štednje', desc: 'Koliko si uštedio za ljetovanje, auto…' },
   { key: 'total', icon: '📊', label: 'Ukupno i graf po danima', desc: 'Zbroj, dnevni prosjek i usporedba s prošlim mjesecom' },
   { key: 'categories', icon: '🍩', label: 'Po kategorijama', desc: 'Prsten i popis kategorija' },
   { key: 'accounts', icon: '💳', label: 'Po računima', desc: 'Koliko ide s kojeg računa', available: () => tracking() },

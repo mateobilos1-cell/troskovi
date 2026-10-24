@@ -457,6 +457,24 @@ button.row { transition: background-color .15s; }
 }
 #add-form > .btn-filled.green { box-shadow: 0 6px 18px color-mix(in srgb, var(--green) 30%, transparent); }
 
+/* Ciljevi štednje */
+.goal-row .top b { font-weight: 600; }
+.g-note { display: block; margin-top: 6px; font-size: 13px; color: var(--text2); letter-spacing: -.08px; }
+.goal-hero { text-align: center; padding: 4px 16px 16px; }
+.gh-ring { position: relative; width: 132px; height: 132px; margin: 0 auto 8px; }
+.goal-ring { width: 100%; height: 100%; display: block; }
+.gr-track { fill: none; stroke: var(--fill); stroke-width: 12; }
+.gr-fill { fill: none; stroke: var(--c); stroke-width: 12; stroke-linecap: round; transition: stroke-dasharray .6s cubic-bezier(.3, .8, .3, 1); }
+.gh-ico { position: absolute; inset: 0; display: grid; place-items: center; font-size: 44px; }
+.gh-amt { font-family: var(--rounded); font-size: 34px; font-weight: 700; letter-spacing: 0; }
+.gh-sub { color: var(--text2); font-size: 15px; letter-spacing: -.24px; }
+.gh-line { margin-top: 6px; font-size: 15px; font-weight: 600; letter-spacing: -.24px; }
+.goal-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; }
+.btn-filled.soft { background: var(--fill); color: var(--tint); }
+.dep-row .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.dep-row .s { font-size: 15px; color: var(--text2); letter-spacing: -.24px; }
+.dep-row .amt { font-variant-numeric: tabular-nums; font-weight: 600; }
+
 /* Zaključani zaslon (Face ID) */
 #lock { display: none; }
 html.locked #lock {
