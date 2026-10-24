@@ -7,7 +7,7 @@ Podaci i prijava idu preko **Supabase** (besplatno), a stranica se objavljuje na
 
 1. Napravi račun na <https://supabase.com> i klikni **New project** (regija: *Central EU (Frankfurt)*).
 2. Lijevo otvori **SQL Editor → New query**, zalijepi cijeli sadržaj `supabase/schema.sql` i klikni **Run**.
-   Isto ponovi sa `supabase/incomes.sql` (tablica za prihode) pa sa `supabase/accounts.sql` (računi i kartice) i `supabase/recurring.sql` (ponavljajući unosi).
+   Isto ponovi sa `supabase/incomes.sql` (tablica za prihode) pa sa `supabase/accounts.sql` (računi i kartice), `supabase/recurring.sql` (ponavljajući unosi) i `supabase/delete-account.sql` (brisanje računa iz aplikacije).
 3. Otvori **Project Settings → API** (ili **Connect**) i kopiraj:
    - *Project URL* → u `config.js` kao `SUPABASE_URL`
    - *anon / publishable* ključ → u `config.js` kao `SUPABASE_ANON_KEY`

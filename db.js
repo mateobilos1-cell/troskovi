@@ -183,6 +183,26 @@ export async function signOut() {
   await sb.auth.signOut();
 }
 
+/**
+ * Trajno briše korisnikov račun i sve njegove podatke (supabase/delete-account.sql).
+ * Prije brisanja ponovno provjerava lozinku, da nitko s otključanim telefonom ne obriše tuđi račun.
+ */
+export async function deleteAccount(email, password) {
+  const clearLocal = (id) => {
+    Object.keys(localStorage).filter((k) => k.startsWith(`fp:${id}:`) || k === 'fp:last-user')
+      .forEach((k) => localStorage.removeItem(k));
+  };
+  if (isDemo) {
+    clearLocal('demo');
+    return demo.deleteAll();
+  }
+  check(await sb.auth.signInWithPassword({ email, password }));
+  const id = userId;
+  check(await sb.rpc('delete_my_account'));
+  clearLocal(id);
+  await sb.auth.signOut({ scope: 'local' }).catch(() => {});
+}
+
 export async function resetPassword(email) {
   if (isDemo) return;
   check(await sb.auth.resetPasswordForEmail(email, { redirectTo: appUrl() }));
@@ -435,6 +455,10 @@ const demo = (() => {
       save(); emit('SIGNED_IN');
     },
     signOut() { load(); mem.user = null; save(); emit('SIGNED_OUT'); },
+    deleteAll() {
+      mem = { user: null, items: [], accounts: [], recurring: [] };
+      save(); emit('SIGNED_OUT');
+    },
     saveSettings(meta) {
       load();
       mem.user.meta = { ...mem.user.meta, ...meta };

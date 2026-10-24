@@ -174,6 +174,7 @@ function errorText(e) {
   if (code === 'weak_password' || /password should be/i.test(msg)) return 'Lozinka mora imati barem 6 znakova.';
   if (/rate limit|too many/i.test(msg)) return 'Previše pokušaja. Pričekaj malo pa pokušaj ponovno.';
   if (db.isNetworkError(e)) return 'Nema veze s internetom.';
+  if (code === 'PGRST202' || /delete_my_account/.test(msg)) return 'Brisanje računa još nije uključeno — pokreni supabase/delete-account.sql u Supabaseu.';
   if (isMissingTable(e) && /accounts|account_id/.test(msg)) return 'Tablica za račune još ne postoji — pokreni supabase/accounts.sql u Supabaseu.';
   if (isMissingTable(e)) return 'Tablica za prihode još ne postoji — pokreni supabase/incomes.sql u Supabaseu.';
   return msg || 'Nešto je pošlo po zlu.';
@@ -1375,10 +1376,16 @@ function renderPostavke() {
     <div class="group">
       <button type="button" class="row center destructive" id="logout">Odjava</button>
     </div>
+
+    <div class="group">
+      <button type="button" class="row center destructive" id="delete-account">Obriši račun</button>
+    </div>
+    <div class="group-footer">Trajno briše tvoj račun i sve tvoje troškove, prihode, račune i postavke.</div>
   `;
   $('#logout').addEventListener('click', async () => {
     try { await db.signOut(); } catch (e) { toast(errorText(e), true); }
   });
+  $('#delete-account').addEventListener('click', openDeleteAccount);
 
   const toggle = $('#track-toggle');
   toggle.addEventListener('change', async () => {
@@ -1503,6 +1510,63 @@ function openOverviewLayout() {
       toast(errorText(e), true);
     }
   }));
+}
+
+// ---------- Postavke: brisanje računa ----------
+function openDeleteAccount() {
+  const pending = db.pendingCount();
+  const sheet = $('#sheet');
+  sheet.innerHTML = `
+    <div class="sheet-bar">
+      <div class="grab"></div>
+      <div class="bar-row">
+        <button type="button" class="left" id="d-cancel">Odustani</button>
+        <h2>Obriši račun</h2>
+        <span></span>
+      </div>
+    </div>
+    <div class="danger-hero">
+      <span class="danger-ico">⚠️</span>
+      <p><b>Ovo se ne može poništiti.</b> Trajno se brišu:</p>
+    </div>
+    <div class="group">
+      <div class="row"><span class="label">Svi troškovi i prihodi</span></div>
+      <div class="row"><span class="label">Računi, budžeti i ponavljajući unosi</span></div>
+      <div class="row"><span class="label">Kategorije i postavke</span></div>
+      <div class="row"><span class="label">Korisnički račun <b>${esc(state.user.email)}</b></span></div>
+    </div>
+    ${pending ? `<div class="group-footer neg">${pending} ${plural(pending, 'unos još čeka', 'unosa još čekaju', 'unosa još čeka')} slanje i bit će izgubljen${pending === 1 ? '' : 'i'}.</div>` : ''}
+    <form id="delete-form" novalidate>
+      ${db.isDemo ? '' : `
+      <div class="group-header"><span>Za potvrdu upiši lozinku</span></div>
+      <div class="group">
+        <label class="row"><input class="row-input" id="d-pass" type="password" autocomplete="current-password" placeholder="Lozinka"></label>
+      </div>`}
+      <button type="submit" class="btn-filled danger" id="d-go">Trajno obriši račun</button>
+    </form>`;
+  openSheet();
+
+  $('#d-cancel').addEventListener('click', closeSheet);
+  $('#delete-form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const pass = $('#d-pass')?.value || '';
+    if (!db.isDemo && !pass) { $('#d-pass').focus(); return toast('Upiši lozinku', true); }
+    if (!navigator.onLine) return toast('Za brisanje računa treba internet', true);
+    if (!confirm('Zadnja provjera: trajno obrisati račun i sve podatke?')) return;
+    const btn = $('#d-go');
+    btn.disabled = true;
+    btn.textContent = 'Brišem…';
+    try {
+      await db.deleteAccount(state.user.email, pass);
+      closeSheet();
+      toast('Račun je obrisan');
+    } catch (e) {
+      btn.disabled = false;
+      btn.textContent = 'Trajno obriši račun';
+      const msg = String(e?.message || '');
+      toast(e?.code === 'invalid_credentials' || /invalid login/i.test(msg) ? 'Pogrešna lozinka.' : errorText(e), true);
+    }
+  });
 }
 
 // ---------- Postavke: vlastite kategorije ----------

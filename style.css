@@ -457,6 +457,14 @@ button.row { transition: background-color .15s; }
 }
 #add-form > .btn-filled.green { box-shadow: 0 6px 18px color-mix(in srgb, var(--green) 30%, transparent); }
 
+/* Brisanje računa */
+.danger-hero { text-align: center; margin: 4px 16px 16px; }
+.danger-ico { font-size: 40px; }
+.danger-hero p { margin: 6px 0 0; color: var(--text2); font-size: 15px; letter-spacing: -.24px; }
+.danger-hero b { color: var(--text); }
+.group-footer.neg { color: var(--red); }
+.btn-filled.danger { background: var(--red); margin-top: 8px; }
+
 /* Vlastite kategorije */
 #cat-list { overflow: visible; }
 #cat-list .layout-row:first-child { border-radius: var(--r-group) var(--r-group) 0 0; }
