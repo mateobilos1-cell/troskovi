@@ -73,8 +73,48 @@ const ACCOUNT_COLORS = ['#FF3B30', '#FF9500', '#C9A400', '#34C759', '#00A99D', '
 const initials = (name) => name.trim().split(/\s+/).map((w) => w[0]).join('').slice(0, 3).toUpperCase() || '?';
 const accBadge = (a, cls = '') => `<span class="acc-badge ${cls} ${[...(a.short || '')].length > 2 ? 'long' : ''}" style="--c:${a.color}">${esc(a.short || initials(a.name))}</span>`;
 
-const CAT_INDEX =Object.fromEntries(Object.entries(KINDS).map(([k, v]) => [k, Object.fromEntries(v.cats.map((c) => [c.id, c]))]));
-const cat = (kind, id) => CAT_INDEX[kind][id] || CAT_INDEX[kind].ostalo;
+// ---------- Kategorije korisnika ----------
+// Ugrađene kategorije (KINDS[kind].cats) + korisnikove promjene iz postavki:
+// vlastite kategorije, promijenjen naziv/ikona/boja, sakrivene i redoslijed.
+const catConf = (kind) => {
+  const c = state.user?.settings?.categories?.[kind] || {};
+  return { custom: c.custom || [], hidden: c.hidden || [], over: c.over || {}, order: c.order || [] };
+};
+let catMemo = { settings: null, lists: {} };
+/** Sve kategorije (i sakrivene), po korisnikovom redoslijedu. */
+function allCats(kind) {
+  const settings = state.user?.settings;
+  if (catMemo.settings !== settings) catMemo = { settings, lists: {} };
+  if (catMemo.lists[kind]) return catMemo.lists[kind];
+  const { custom, hidden, over, order } = catConf(kind);
+  const list = [...KINDS[kind].cats.map((c) => ({ ...c, ...cleanCat(over[c.id]), builtin: true })),
+    ...custom.map((c) => ({ id: c.id, label: 'Kategorija', icon: '🏷️', color: '#8E8E93', ...cleanCat(c), builtin: false }))]
+    .map((c) => ({ ...c, hidden: hidden.includes(c.id) }));
+  const pos = (id) => { const i = order.indexOf(id); return i < 0 ? order.length + list.findIndex((c) => c.id === id) : i; };
+  list.sort((a, b) => pos(a.id) - pos(b.id));
+  catMemo.lists[kind] = list;
+  return list;
+}
+// Korisnikov unos (naziv, emoji, boja) — sigurno za ispis u HTML
+// Prvi emoji u tekstu (ili prvi znak ako emojija nema)
+const firstGrapheme = (s) => {
+  const str = String(s || '').trim();
+  if (!str) return '';
+  const parts = window.Intl?.Segmenter ? [...new Intl.Segmenter().segment(str)].map((x) => x.segment) : [...str];
+  return parts.find((g) => /\p{Extended_Pictographic}/u.test(g)) || parts.find((g) => !/[\s<>&"']/.test(g)) || '';
+};
+function cleanCat(c) {
+  if (!c) return {};
+  const out = {};
+  if (typeof c.label === 'string' && c.label.trim()) out.label = c.label.trim().slice(0, 24);
+  const icon = firstGrapheme(c.icon).replace(/[<>&"']/g, '');
+  if (icon) out.icon = icon;
+  if (/^#[0-9a-f]{6}$/i.test(c.color || '')) out.color = c.color;
+  return out;
+}
+/** Kategorije koje se nude kod unosa. */
+const visibleCats = (kind) => allCats(kind).filter((c) => !c.hidden);
+const cat = (kind, id) => allCats(kind).find((c) => c.id === id) || allCats(kind).find((c) => c.id === 'ostalo') || KINDS[kind].cats.at(-1);
 
 const MONTHS = ['siječanj', 'veljača', 'ožujak', 'travanj', 'svibanj', 'lipanj',
   'srpanj', 'kolovoz', 'rujan', 'listopad', 'studeni', 'prosinac'];
@@ -512,7 +552,8 @@ async function render() {
 
 // ---------- Zajednički dijelovi ----------
 function catButtons(kind, selected) {
-  return KINDS[kind].cats.map((c) => `
+  // sakrivena kategorija se ipak prikaže ako je odabrana (npr. kod uređivanja starog unosa)
+  return allCats(kind).filter((c) => !c.hidden || c.id === selected).map((c) => `
     <button type="button" class="cat ${c.id === selected ? 'on' : ''}" data-cat="${c.id}" style="--c:${c.color}">
       <span class="sq">${c.icon}</span><span class="lbl">${esc(c.label)}</span>
     </button>`).join('');
@@ -1208,6 +1249,21 @@ function renderPostavke() {
       </button>
     </div>
 
+    <div class="group-header"><span>Kategorije</span></div>
+    <div class="group">
+      <button type="button" class="row" id="cats-expense" style="--sep-left:60px">
+        <span class="ico-sq" style="--c:var(--tint)">🛒</span>
+        <span class="label">Kategorije troškova</span>
+        <span class="value">${visibleCats('expense').length}</span><span class="chev"></span>
+      </button>
+      <button type="button" class="row" id="cats-income" style="--sep-left:60px">
+        <span class="ico-sq" style="--c:var(--green)">💼</span>
+        <span class="label">Kategorije prihoda</span>
+        <span class="value">${visibleCats('income').length}</span><span class="chev"></span>
+      </button>
+    </div>
+    <div class="group-footer">Dodaj svoje kategorije, promijeni naziv, ikonu ili boju i sakrij one koje ne koristiš.</div>
+
     <div class="group-header"><span>Računi i kartice</span></div>
     <div class="group">
       <label class="row"><span class="label">Prati račune</span>
@@ -1242,7 +1298,7 @@ function renderPostavke() {
     </div>
     <div class="group-header"><span>Po kategorijama</span></div>
     <div class="group budget-form">
-      ${EXPENSE_CATEGORIES.map((c) => budgetRow(c.id, `<span class="ico-sq" style="--c:${c.color}">${c.icon}</span>`, esc(c.label))).join('')}
+      ${allCats('expense').filter((c) => !c.hidden || state.user.settings.budgets.cats[c.id]).map((c) => budgetRow(c.id, `<span class="ico-sq" style="--c:${c.color}">${c.icon}</span>`, esc(c.label))).join('')}
     </div>
     <div class="group-footer">Ostavi prazno za kategorije koje ne želiš pratiti.</div>` : ''}
 
@@ -1292,6 +1348,8 @@ function renderPostavke() {
 
   wireRecurringSection(v);
   $('#overview-layout').addEventListener('click', openOverviewLayout);
+  $('#cats-expense').addEventListener('click', () => openCategories('expense'));
+  $('#cats-income').addEventListener('click', () => openCategories('income'));
 
   const btoggle = $('#budget-toggle');
   btoggle.addEventListener('change', async () => {
@@ -1389,6 +1447,166 @@ function openOverviewLayout() {
       toast(errorText(e), true);
     }
   }));
+}
+
+// ---------- Postavke: vlastite kategorije ----------
+const CAT_EMOJI = ['🛒', '☕', '🍔', '🍺', '🚗', '⛽', '🚌', '🏠', '💡', '🎉', '🎬', '🎮', '👕', '💇', '💊', '🏋️', '📱', '💻', '🛍️', '✈️',
+  '🎁', '🐶', '🧒', '📚', '🎓', '🚬', '🧾', '📦', '💼', '💰', '⭐', '🏷️'];
+const CAT_COLORS = ['#FF3B30', '#FF9500', '#FFCC00', '#34C759', '#30B0C7', '#5AC8FA', '#007AFF', '#5856D6', '#AF52DE', '#FF2D55', '#A2845E', '#8E8E93'];
+
+// Mijenja postavke kategorija jedne vrste i sprema ih uz profil
+async function saveCatConf(kind, change) {
+  const all = JSON.parse(JSON.stringify(state.user.settings.categories || {}));
+  const conf = { custom: [], hidden: [], over: {}, order: [], ...(all[kind] || {}) };
+  change(conf);
+  all[kind] = conf;
+  state.user.settings = await db.saveSettings({ categories: all });
+}
+
+function openCategories(kind) {
+  const title = kind === 'income' ? 'Kategorije prihoda' : 'Kategorije troškova';
+  const sheet = $('#sheet');
+  sheet.innerHTML = `
+    <div class="sheet-bar">
+      <div class="grab"></div>
+      <div class="bar-row">
+        <span></span>
+        <h2>${title}</h2>
+        <button type="button" class="right" id="c-done">Gotovo</button>
+      </div>
+    </div>
+    <div class="group" id="cat-list">
+      ${allCats(kind).map((c) => `
+        <div class="row layout-row cat-manage ${c.hidden ? 'is-hidden' : ''}" data-key="${c.id}" style="--c:${c.color}">
+          <span class="handle" aria-label="Povuci za promjenu redoslijeda"><i></i><i></i><i></i></span>
+          <button type="button" class="cm-edit">
+            <span class="ico-sq">${c.icon}</span>
+            <span class="main"><span class="t">${esc(c.label)}</span><span class="s">${c.builtin ? 'ugrađena' : 'vlastita'}${c.hidden ? ' · skrivena' : ''}</span></span>
+          </button>
+          <input type="checkbox" class="switch" aria-label="Prikaži kod unosa" ${c.hidden ? '' : 'checked'}>
+        </div>`).join('')}
+      <button type="button" class="row tinted add-acc" id="c-add"><span class="plus-ico">+</span><span class="label">Nova kategorija</span></button>
+    </div>
+    <div class="group-footer">Dodirni kategoriju za promjenu naziva, ikone ili boje. Prekidač je skriva iz unosa; stari unosi ostaju u svojoj kategoriji. Povuci ≡ za redoslijed.</div>`;
+  openSheet();
+
+  const close = () => { closeSheet(); render(); };
+  $('#c-done').addEventListener('click', close);
+  $('#c-add').addEventListener('click', () => openCategoryEdit(kind, null));
+  $$('.cm-edit', sheet).forEach((b) => b.addEventListener('click', () => {
+    openCategoryEdit(kind, cat(kind, b.closest('.cat-manage').dataset.key));
+  }));
+  $$('.cat-manage .switch', sheet).forEach((sw) => sw.addEventListener('change', async () => {
+    const row = sw.closest('.cat-manage');
+    const id = row.dataset.key;
+    if (!sw.checked && visibleCats(kind).length <= 1) {
+      sw.checked = true;
+      return toast('Barem jedna kategorija mora ostati vidljiva', true);
+    }
+    try {
+      await saveCatConf(kind, (c) => {
+        c.hidden = c.hidden.filter((x) => x !== id);
+        if (!sw.checked) c.hidden.push(id);
+      });
+      row.classList.toggle('is-hidden', !sw.checked);
+      $('.s', row).textContent = `${cat(kind, id).builtin ? 'ugrađena' : 'vlastita'}${sw.checked ? '' : ' · skrivena'}`;
+    } catch (e) {
+      sw.checked = !sw.checked;
+      toast(errorText(e), true);
+    }
+  }));
+  wireReorder($('#cat-list'), async (order) => {
+    try { await saveCatConf(kind, (c) => { c.order = order; }); } catch (e) { toast(errorText(e), true); }
+  });
+}
+
+// Nova (c = null) ili postojeća kategorija: naziv, ikona, boja
+function openCategoryEdit(kind, c) {
+  const isNew = !c;
+  let icon = c?.icon || '🏷️';
+  let color = c?.color || CAT_COLORS.at(6);
+  const sheet = $('#sheet');
+  sheet.innerHTML = `
+    <div class="sheet-bar">
+      <div class="grab"></div>
+      <div class="bar-row">
+        <button type="button" class="left" id="ce-back">Natrag</button>
+        <h2>${isNew ? 'Nova kategorija' : 'Uredi kategoriju'}</h2>
+        <button type="submit" class="right" form="cat-form">Spremi</button>
+      </div>
+    </div>
+    <form id="cat-form" novalidate>
+      <div class="cat-preview"><span class="sq" id="ce-preview"></span></div>
+      <div class="group">
+        <label class="row"><input class="row-input" id="ce-name" placeholder="Naziv (npr. Teretana)" maxlength="24" value="${esc(c?.label)}" autocomplete="off"></label>
+      </div>
+      <div class="group-header"><span>Ikona</span></div>
+      <div class="group">
+        <div class="emoji-grid">${CAT_EMOJI.map((e) => `<button type="button" class="emoji-opt" data-e="${e}">${e}</button>`).join('')}</div>
+        <label class="row"><span class="label">Ili upiši svoj emoji</span><input class="pill-select" id="ce-emoji" maxlength="8" autocomplete="off" style="width:64px;text-align:center"></label>
+      </div>
+      <div class="group-header"><span>Boja</span></div>
+      <div class="group"><div class="row colors">
+        ${CAT_COLORS.map((x) => `<button type="button" class="color-dot" data-c="${x}" style="--c:${x}" aria-label="Boja"></button>`).join('')}
+      </div></div>
+      ${isNew ? '' : c.builtin
+        ? '<div class="group"><button type="button" class="row center tinted" id="ce-reset">Vrati izvorni naziv, ikonu i boju</button></div>'
+        : '<div class="group"><button type="button" class="row center destructive" id="ce-del">Obriši kategoriju</button></div>'}
+    </form>`;
+  openSheet();
+
+  const form = $('#cat-form');
+  const refresh = () => {
+    const p = $('#ce-preview');
+    p.textContent = icon;
+    p.style.setProperty('--c', color);
+    $$('.emoji-opt', form).forEach((b) => b.classList.toggle('on', b.dataset.e === icon));
+    $$('.color-dot', form).forEach((d) => d.classList.toggle('on', d.dataset.c === color));
+  };
+  refresh();
+  $$('.emoji-opt', form).forEach((b) => b.addEventListener('click', () => { icon = b.dataset.e; $('#ce-emoji').value = ''; refresh(); }));
+  $('#ce-emoji').addEventListener('input', (e) => { const g = firstGrapheme(e.target.value); if (g) { icon = g; refresh(); } });
+  $$('.color-dot', form).forEach((d) => d.addEventListener('click', () => { color = d.dataset.c; refresh(); }));
+  $('#ce-back').addEventListener('click', () => openCategories(kind));
+
+  $('#ce-reset')?.addEventListener('click', async () => {
+    try {
+      await saveCatConf(kind, (conf) => { delete conf.over[c.id]; });
+      toast('Vraćeno na izvorno');
+      openCategories(kind);
+    } catch (e) { toast(errorText(e), true); }
+  });
+  $('#ce-del')?.addEventListener('click', async () => {
+    if (!confirm(`Obrisati kategoriju „${c.label}"? Unosi u njoj prikazivat će se kao „${cat(kind, 'ostalo').label}".`)) return;
+    try {
+      await saveCatConf(kind, (conf) => {
+        conf.custom = conf.custom.filter((x) => x.id !== c.id);
+        conf.hidden = conf.hidden.filter((x) => x !== c.id);
+        conf.order = conf.order.filter((x) => x !== c.id);
+      });
+      toast('Kategorija obrisana');
+      openCategories(kind);
+    } catch (e) { toast(errorText(e), true); }
+  });
+
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const label = $('#ce-name').value.trim();
+    if (!label) { $('#ce-name').focus(); return toast('Upiši naziv kategorije', true); }
+    if (allCats(kind).some((x) => x.id !== c?.id && x.label.toLowerCase() === label.toLowerCase())) {
+      return toast('Kategorija s tim nazivom već postoji', true);
+    }
+    const look = cleanCat({ label, icon, color });
+    try {
+      await saveCatConf(kind, (conf) => {
+        if (isNew) conf.custom.push({ id: `c${Date.now().toString(36)}`, ...look });
+        else if (c.builtin) conf.over[c.id] = look;
+        else conf.custom = conf.custom.map((x) => (x.id === c.id ? { ...x, ...look } : x));
+      });
+      toast(isNew ? 'Kategorija dodana' : 'Promjene spremljene');
+      openCategories(kind);
+    } catch (e) { toast(errorText(e), true); }
+  });
 }
 
 // Promjena redoslijeda povlačenjem ručice ≡ (kao u iOS postavkama)

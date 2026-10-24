@@ -415,6 +415,27 @@ button.row { transition: background-color .15s; }
 .layout-row .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .layout-row .s { font-size: 13px; color: var(--text2); letter-spacing: -.08px; }
 
+/* Vlastite kategorije */
+#cat-list { overflow: visible; }
+#cat-list .layout-row:first-child { border-radius: var(--r-group) var(--r-group) 0 0; }
+.cm-edit {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px;
+  border: 0; background: none; padding: 0; text-align: left;
+}
+.cat-manage.is-hidden .cm-edit { opacity: .45; }
+.cat-preview { display: flex; justify-content: center; margin: 4px 0 16px; }
+.cat-preview .sq {
+  width: 72px; height: 72px; border-radius: 20px; display: grid; place-items: center; font-size: 38px;
+  background: color-mix(in srgb, var(--c) 20%, var(--card)); box-shadow: inset 0 0 0 2px var(--c);
+  transition: background-color .2s, box-shadow .2s;
+}
+.emoji-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; padding: 10px 10px 6px; }
+.emoji-opt {
+  aspect-ratio: 1; border: 0; background: none; border-radius: 10px; font-size: 22px; padding: 0;
+  display: grid; place-items: center;
+}
+.emoji-opt.on { background: var(--fill); box-shadow: inset 0 0 0 2px var(--tint); }
+
 /* Ponavljajući unosi */
 .rep { color: var(--tint); font-size: 14px; font-weight: 600; }
 .rec-item.paused { opacity: .5; }
