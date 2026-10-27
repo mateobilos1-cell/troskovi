@@ -44,7 +44,8 @@
   }
 }
 
-* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+/* touch-action se ne nasljeđuje: mora biti na svakom elementu da dvostruki dodir ne zumira */
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
 html, body { margin: 0; }
 body {
   background: var(--bg);
