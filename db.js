@@ -55,6 +55,9 @@ export function useAccounts(on) { withAccounts = !!on; }
 // Isto za recurring_id (recurring.sql)
 let withRecurring = false;
 export function useRecurring(on) { withRecurring = !!on; }
+// Isto za household_id/user_id kod troškova (household.sql)
+let withHousehold = false;
+export function useHousehold(on) { withHousehold = !!on; }
 
 // ---------- Spremanje na uređaj ----------
 
@@ -238,6 +241,7 @@ function fromRow(r, dateCol) {
   return {
     id: r.id, amount: Number(r.amount), category: r.category, note: r.note,
     date: r[dateCol], account_id: r.account_id ?? null, recurring_id: r.recurring_id ?? null, created_at: r.created_at,
+    household_id: r.household_id ?? null, user_id: r.user_id ?? userId,
   };
 }
 function toRow(e, dateCol) {
@@ -245,10 +249,17 @@ function toRow(e, dateCol) {
   if (e.date) row[dateCol] = e.date;
   if (withAccounts && 'account_id' in e) row.account_id = e.account_id;
   if (withRecurring && e.recurring_id) row.recurring_id = e.recurring_id;
+  if (withHousehold && dateCol === 'spent_at' && 'household_id' in e) row.household_id = e.household_id;
   return row;
 }
 const cols = (dateCol) => `id, amount, category, note, ${dateCol}, created_at`
-  + `${withAccounts ? ', account_id' : ''}${withRecurring ? ', recurring_id' : ''}`;
+  + `${withAccounts ? ', account_id' : ''}${withRecurring ? ', recurring_id' : ''}`
+  + `${withHousehold && dateCol === 'spent_at' ? ', household_id, user_id' : ''}`;
+// Moji troškovi (hid = null) ili zajednički troškovi kućanstva (hid); prihodi su uvijek samo moji
+function scoped(q, kind, hid) {
+  if (!withHousehold || kind !== 'expense') return q;
+  return hid ? q.eq('household_id', hid) : q.eq('user_id', userId);
+}
 const ACC_COLS = 'id, name, short, color, created_at';
 const REC_COLS = 'id, kind, amount, category, note, account_id, day, start_month, last_month, active, created_at';
 const normRec = (r) => ({ ...r, amount: Number(r.amount) });
@@ -259,16 +270,16 @@ const normGoal = (g, deps = []) => ({
 });
 
 const supa = {
-  async list(kind, from, to) {
+  async list(kind, from, to, hid) {
     const { table, dateCol } = TABLES[kind];
-    const rows = check(await sb.from(table).select(cols(dateCol))
+    const rows = check(await scoped(sb.from(table).select(cols(dateCol)), kind, hid)
       .gte(dateCol, from).lt(dateCol, to)
       .order(dateCol, { ascending: false }).order('created_at', { ascending: false }));
     return rows.map((r) => fromRow(r, dateCol));
   },
   async recent(kind, limit) {
     const { table, dateCol } = TABLES[kind];
-    const rows = check(await sb.from(table).select(cols(dateCol))
+    const rows = check(await scoped(sb.from(table).select(cols(dateCol)), kind, null)
       .order('created_at', { ascending: false }).limit(limit));
     return rows.map((r) => fromRow(r, dateCol));
   },
@@ -310,19 +321,43 @@ const supa = {
     .map((d) => ({ ...d, amount: Number(d.amount) })),
   async addDeposit(d) { check(await sb.from('goal_deposits').insert(d)); },
   async removeDeposit(id) { check(await sb.from('goal_deposits').delete().eq('id', id)); },
+  // kućanstvo
+  async household() {
+    const mine = check(await sb.from('household_members').select('household_id').eq('user_id', userId).maybeSingle());
+    if (!mine) return null;
+    const h = check(await sb.from('households').select('id, name, code').eq('id', mine.household_id).single());
+    const members = check(await sb.from('household_members').select('user_id, display_name, joined_at')
+      .eq('household_id', h.id).order('joined_at'));
+    return { ...h, members };
+  },
+  async createHousehold(name, displayName) { check(await sb.rpc('create_household', { p_name: name, p_display: displayName })); },
+  async joinHousehold(code, displayName) { check(await sb.rpc('join_household', { p_code: code, p_display: displayName })); },
+  async leaveHousehold() { check(await sb.rpc('leave_household')); },
 };
 
 // ---------- Javne funkcije (spremanje na uređaj + mreža) ----------
 
-const flags = () => `${withAccounts ? 'a' : ''}${withRecurring ? 'r' : ''}`;
+const flags = () => `${withAccounts ? 'a' : ''}${withRecurring ? 'r' : ''}${withHousehold ? 'h' : ''}`;
 const byNewest = (a, b) => b.date.localeCompare(a.date) || b.created_at.localeCompare(a.created_at);
 
-/** Zapisi s datumom u rasponu [from, to), najnoviji prvi. Datumi su 'YYYY-MM-DD'. */
-export async function list(kind, from, to) {
-  const rows = await cached(`list:${kind}:${from}:${to}:${flags()}`, () => R.list(kind, from, to));
-  const pending = pendingOf(kind).filter((r) => r.date >= from && r.date < to);
+/**
+ * Zapisi s datumom u rasponu [from, to), najnoviji prvi. Datumi su 'YYYY-MM-DD'.
+ * hid = id kućanstva → zajednički troškovi svih članova; bez njega → samo moji.
+ */
+export async function list(kind, from, to, hid = null) {
+  const rows = await cached(`list:${kind}:${from}:${to}:${hid || 'me'}:${flags()}`, () => R.list(kind, from, to, hid));
+  const pending = pendingOf(kind)
+    .filter((r) => r.date >= from && r.date < to && (!hid || r.household_id === hid));
   return pending.length ? [...pending, ...rows].sort(byNewest) : rows;
 }
+
+// ---------- Kućanstvo (household.sql) ----------
+
+/** Moje kućanstvo s članovima, ili null. */
+export const getHousehold = () => cached('household', () => R.household());
+export async function createHousehold(name, displayName) { await R.createHousehold(name, displayName); touch(); }
+export async function joinHousehold(code, displayName) { await R.joinHousehold(code, displayName); touch(); }
+export async function leaveHousehold() { await R.leaveHousehold(); touch(); }
 
 /** Zadnje uneseni zapisi (po vremenu unosa). */
 export async function listRecent(kind, limit) {
@@ -435,7 +470,8 @@ const demo = (() => {
   const iso = (d) => `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
   const copy = (x) => JSON.parse(JSON.stringify(x));
   const ofKind = (kind) => load().items.filter((r) => r.kind === kind)
-    .map(({ kind: _k, ...r }) => ({ account_id: null, recurring_id: null, ...r }));
+    .map(({ kind: _k, ...r }) => ({ account_id: null, recurring_id: null, household_id: null, user_id: 'demo', ...r }));
+  const scopeOk = (r, hid) => (hid ? r.household_id === hid : r.user_id === 'demo');
 
   function seedExpenses() {
     const cats = [
@@ -513,8 +549,44 @@ const demo = (() => {
       return mem.user.settings;
     },
     // podaci (isti oblik kao supa)
-    list: (kind, from, to) => copy(ofKind(kind).filter((r) => r.date >= from && r.date < to).sort(byNewest)),
-    recent: (kind, limit) => copy(ofKind(kind).sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, limit)),
+    list: (kind, from, to, hid) => copy(ofKind(kind)
+      .filter((r) => r.date >= from && r.date < to && (kind !== 'expense' || scopeOk(r, hid))).sort(byNewest)),
+    recent: (kind, limit) => copy(ofKind(kind).filter((r) => r.user_id === 'demo')
+      .sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, limit)),
+    // kućanstvo: "Pridruži se" s bilo kojim kodom stvara demo kućanstvo s partnericom Anom i njezinim troškovima
+    household: () => copy(load().household || null),
+    createHousehold(name, displayName) {
+      load().household = {
+        id: uid(), name, code: Math.random().toString(36).slice(2, 8).toUpperCase(),
+        members: [{ user_id: 'demo', display_name: displayName }],
+      };
+      save();
+    },
+    joinHousehold(code, displayName) {
+      load();
+      const hid = uid();
+      mem.household = {
+        id: hid, name: 'Naš stan', code: String(code).toUpperCase(),
+        members: [{ user_id: 'ana', display_name: 'Ana' }, { user_id: 'demo', display_name: displayName }],
+      };
+      const now = new Date();
+      [['namirnice', 46.3, 'Lidl'], ['stanovanje', 120, 'Režije'], ['namirnice', 23.9, 'Konzum'], ['restorani', 18.5, 'Pizza'],
+        ['kupovina', 34, 'IKEA']].forEach(([category, amount, note], i) => {
+        const d = new Date(now.getFullYear(), now.getMonth(), Math.max(1, now.getDate() - i * 3));
+        mem.items.push({
+          id: uid(), kind: 'expense', category, amount, note, user_id: 'ana', household_id: hid,
+          date: iso(d), created_at: d.toISOString(),
+        });
+      });
+      save();
+    },
+    leaveHousehold() {
+      load();
+      const hid = mem.household?.id;
+      mem.items.forEach((r) => { if (r.household_id === hid && (r.user_id || 'demo') === 'demo') r.household_id = null; });
+      mem.household = null;
+      save();
+    },
     insert(kind, e, id) {
       load();
       if (mem.items.some((x) => x.id === id)) return;
@@ -563,7 +635,8 @@ const demo = (() => {
 // U demo načinu se gubitak veze može isprobati: localStorage 'fp-demo-offline' = '1' ili isključen internet
 const DATA_OPS = ['list', 'recent', 'insert', 'update', 'remove', 'addRecurringEntries', 'accounts', 'addAccount',
   'updateAccount', 'removeAccount', 'recurring', 'addRecurring', 'updateRecurring', 'removeRecurring',
-  'goals', 'addGoal', 'updateGoal', 'removeGoal', 'deposits', 'addDeposit', 'removeDeposit'];
+  'goals', 'addGoal', 'updateGoal', 'removeGoal', 'deposits', 'addDeposit', 'removeDeposit',
+  'household', 'createHousehold', 'joinHousehold', 'leaveHousehold'];
 const demoRemote = Object.fromEntries(DATA_OPS.map((op) => [op, async (...args) => {
   await new Promise((r) => setTimeout(r, 120)); // kao da ide preko mreže
   if (!navigator.onLine || localStorage.getItem('fp-demo-offline') === '1') throw new TypeError('Failed to fetch');

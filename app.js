@@ -175,6 +175,7 @@ function errorText(e) {
   if (/rate limit|too many/i.test(msg)) return 'Previše pokušaja. Pričekaj malo pa pokušaj ponovno.';
   if (db.isNetworkError(e)) return 'Nema veze s internetom.';
   if (code === 'PGRST202' || /delete_my_account/.test(msg)) return 'Brisanje računa još nije uključeno — pokreni supabase/delete-account.sql u Supabaseu.';
+  if ((isMissingTable(e) || code === 'PGRST202') && /household/.test(msg)) return 'Kućanstvo još nije uključeno — pokreni supabase/household.sql u Supabaseu.';
   if (isMissingTable(e) && /goal/.test(msg)) return 'Tablica za ciljeve još ne postoji — pokreni supabase/goals.sql u Supabaseu.';
   if (isMissingTable(e) && /accounts|account_id/.test(msg)) return 'Tablica za račune još ne postoji — pokreni supabase/accounts.sql u Supabaseu.';
   if (isMissingTable(e)) return 'Tablica za prihode još ne postoji — pokreni supabase/incomes.sql u Supabaseu.';
@@ -211,6 +212,9 @@ const state = {
   accounts: [],
   recurring: [],
   recurringReady: false, // false dok recurring.sql nije pokrenut
+  household: null, // { id, name, code, members:[{user_id, display_name}] }
+  householdReady: false, // false dok household.sql nije pokrenut
+  scope: 'mine', // Pregled: 'mine' (moje) ili 'household' (kućanstvo)
 };
 
 const tracking = () => !!state.user?.settings?.trackAccounts;
@@ -226,6 +230,24 @@ const firstMonthFor = (day) => {
   const m = monthStart(now);
   return dueDate(m, day).getDate() >= now.getDate() ? m : addMonths(m, 1);
 };
+
+// Kućanstvo (household.sql). Bez tablice aplikacija radi kao i prije, samo bez zajedničkih troškova.
+async function loadHousehold() {
+  try {
+    db.useHousehold(true);
+    state.household = await db.getHousehold();
+    state.householdReady = true;
+  } catch (e) {
+    state.household = null;
+    state.householdReady = false;
+    db.useHousehold(false);
+    if (!isMissingTable(e)) toast(errorText(e), true);
+  }
+  if (!state.household) state.scope = 'mine';
+}
+const hh = () => state.household;
+const memberName = (uid) => (uid === state.user?.id ? 'Ti'
+  : hh()?.members.find((m) => m.user_id === uid)?.display_name || 'Član kućanstva');
 
 async function loadRecurring() {
   try {
@@ -468,7 +490,7 @@ function setUser(user) {
   if (user) {
     $('#auth').hidden = true;
     $('#app').hidden = false;
-    Promise.all([loadAccounts(), loadRecurring()]).then(() => {
+    Promise.all([loadAccounts(), loadRecurring(), loadHousehold()]).then(() => {
       go('trosak');
       syncNow();
     });
@@ -696,7 +718,8 @@ const accChipText = (id) => {
   return a.name.length > 12 && /\p{L}{2,}/u.test(a.short || '') ? a.short : a.name;
 };
 
-function entryFields(kind, { amount = '', category = null, note = '', date = today(), account = null, repeat = false, compact = false } = {}) {
+function entryFields(kind, { amount = '', category = null, note = '', date = today(), account = null, repeat = false, compact = false, shared = false, entrant = null } = {}) {
+  const canShare = kind === 'expense' && !!hh();
   // Kompaktni obrazac (novi unos): datum, račun i ponavljanje su čipovi u jednom retku,
   // a dodir na čip otvara iOS izbornik (datum/račun) ili ga uključuje (ponavljanje).
   if (compact) {
@@ -715,6 +738,10 @@ function entryFields(kind, { amount = '', category = null, note = '', date = tod
       cells.push(`<button type="button" class="opt repeat-chip" aria-pressed="false"><span class="opt-k">Ponavljanje</span><span class="opt-v rep-txt">Ne</span></button>
         <input type="checkbox" class="repeat" hidden>`);
     }
+    if (canShare) {
+      cells.push(`<button type="button" class="opt shared-chip ${shared ? 'set' : ''}" aria-pressed="${shared}"><span class="opt-k">Zajedničko</span><span class="opt-v shared-txt">${shared ? 'Da' : 'Ne'}</span></button>
+        <input type="checkbox" class="shared" hidden ${shared ? 'checked' : ''}>`);
+    }
     return `
       ${amountGroup(kind, amount)}
       <div class="group"><div class="cats">${catButtons(kind, category)}</div></div>
@@ -732,6 +759,9 @@ function entryFields(kind, { amount = '', category = null, note = '', date = tod
       ${accountRow(account)}
       ${repeat && state.recurringReady ? `<label class="row"><span class="label">Ponavljaj svaki mjesec</span>
         <input type="checkbox" class="switch repeat"></label>` : ''}
+      ${canShare ? `<label class="row"><span class="label">Zajednički trošak</span>
+        <input type="checkbox" class="switch shared" ${shared ? 'checked' : ''}></label>` : ''}
+      ${entrant && entrant !== state.user.id ? `<div class="row"><span class="label">Unio/la</span><span class="value">${esc(memberName(entrant))}</span></div>` : ''}
     </div>`;
 }
 
@@ -744,6 +774,8 @@ function readFields(form) {
   };
   const sel = $('.account', form);
   if (tracking() && sel) e.account_id = sel.value || null;
+  const shared = $('.shared', form);
+  if (shared && hh()) e.household_id = shared.checked ? hh().id : null;
   return e;
 }
 
@@ -759,6 +791,14 @@ function wireFields(form) {
   });
   const acc = $('.opt .account', form);
   acc?.addEventListener('change', () => { $('.acc-txt', form).textContent = accChipText(acc.value); });
+  const sh = $('.shared-chip', form);
+  sh?.addEventListener('click', () => {
+    const box = $('.shared', form);
+    box.checked = !box.checked;
+    sh.classList.toggle('set', box.checked);
+    sh.setAttribute('aria-pressed', String(box.checked));
+    $('.shared-txt', form).textContent = box.checked ? 'Da' : 'Ne';
+  });
   const rep = $('.repeat-chip', form);
   rep?.addEventListener('click', () => {
     const box = $('.repeat', form);
@@ -772,11 +812,13 @@ function wireFields(form) {
 function itemRow(kind, r, showDate = false) {
   const c = cat(kind, r.category);
   const acc = tracking() ? accById(r.account_id) : null;
-  const sub = [showDate ? dayLabel(r.date) : null, acc ? esc(acc.name) : null, r.note ? esc(r.note) : null].filter(Boolean).join(' · ');
+  // u pogledu Kućanstvo umjesto računa piše tko je unio trošak
+  const who = state.scope === 'household' && state.view === 'pregled' ? esc(memberName(r.user_id)) : (acc ? esc(acc.name) : null);
+  const sub = [showDate ? dayLabel(r.date) : null, who, r.note ? esc(r.note) : null].filter(Boolean).join(' · ');
   return `
     <button class="row item" data-id="${r.id}" data-kind="${kind}" style="--c:${c.color}">
       <span class="ico-sq">${c.icon}</span>
-      <span class="main"><span class="t">${esc(c.label)}${r.recurring_id ? ' <span class="rep" title="Ponavljajući unos">↻</span>' : ''}${r.pending ? ' <span class="pend" title="Čeka vezu">⏳</span>' : ''}</span>${sub ? `<span class="s">${sub}</span>` : ''}</span>
+      <span class="main"><span class="t">${esc(c.label)}${r.recurring_id ? ' <span class="rep" title="Ponavljajući unos">↻</span>' : ''}${r.pending ? ' <span class="pend" title="Čeka vezu">⏳</span>' : ''}${r.household_id ? ' <span class="shared-mark" title="Zajednički trošak">👥</span>' : ''}</span>${sub ? `<span class="s">${sub}</span>` : ''}</span>
       <span class="amt ${kind === 'income' ? 'pos' : ''}">${KINDS[kind].sign}${money(r.amount)}</span>
       <span class="chev"></span>
     </button>`;
@@ -1272,7 +1314,115 @@ function animateDonut(root, key) {
 }
 
 // ---------- Pregled ----------
+// Prekidač Moje | Kućanstvo na vrhu Pregleda (samo za članove kućanstva)
+function scopeSwitch() {
+  if (!hh()) return '';
+  return `<div class="segmented" id="scope-switch">
+    <button type="button" data-scope="mine" class="${state.scope === 'mine' ? 'on' : ''}">Moje</button>
+    <button type="button" data-scope="household" class="${state.scope === 'household' ? 'on' : ''}">${esc(hh().name)}</button>
+  </div>`;
+}
+function wireScopeSwitch(v) {
+  $$('#scope-switch button', v).forEach((b) => b.addEventListener('click', () => {
+    if (state.scope === b.dataset.scope) return;
+    state.scope = b.dataset.scope;
+    state.filterCat = null;
+    state.filterAcc = null;
+    state.countNext = true;
+    lastDonutKey = null;
+    render();
+  }));
+}
+
+const MEMBER_COLORS = ['#007AFF', '#FF2D55', '#34C759', '#FF9500', '#AF52DE', '#5AC8FA'];
+
+// Pregled zajedničkih troškova kućanstva: ukupno, tko je koliko potrošio, kategorije, unosi
+async function renderPregledHousehold() {
+  const m = state.month;
+  const h = hh();
+  const rows = await db.list('expense', isoDate(m), isoDate(addMonths(m, 1)), h.id);
+  if (state.view !== 'pregled' || state.scope !== 'household') return;
+  const isCurrent = m.getTime() === monthStart(new Date()).getTime();
+  const total = sum(rows);
+
+  // tko je koliko potrošio na zajednički život (bez dugovanja i omjera)
+  const known = new Set(h.members.map((x) => x.user_id));
+  const people = h.members.map((mb, i) => ({
+    name: mb.user_id === state.user.id ? `${mb.display_name} (ti)` : mb.display_name,
+    color: MEMBER_COLORS.at(i % MEMBER_COLORS.length),
+    val: sum(rows.filter((r) => r.user_id === mb.user_id)),
+  }));
+  const former = sum(rows.filter((r) => !known.has(r.user_id)));
+  if (former) people.push({ name: 'Bivši članovi', color: '#8E8E93', val: former });
+
+  const byCat = {};
+  rows.forEach((r) => { byCat[r.category] = (byCat[r.category] || 0) + r.amount; });
+  const catList = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
+  const shown = state.filterCat ? rows.filter((r) => r.category === state.filterCat) : rows;
+  const groups = [];
+  shown.forEach((r) => {
+    const g = groups.at(-1);
+    if (g && g.date === r.date) g.rows.push(r); else groups.push({ date: r.date, rows: [r] });
+  });
+
+  const v = $('#view');
+  v.innerHTML = `
+    <div class="month-nav">
+      <button type="button" id="prev-m" aria-label="Prethodni mjesec">${CHEVRON_L}</button>
+      <span class="m">${monthName(m)} ${m.getFullYear()}.</span>
+      <button type="button" id="next-m" aria-label="Sljedeći mjesec" ${isCurrent ? 'disabled' : ''}>${CHEVRON_R}</button>
+    </div>
+    ${scopeSwitch()}
+
+    <div class="group total">
+      <div class="k">Zajednički troškovi</div>
+      <div class="big" data-count="${total}">${money(total)}</div>
+      <div class="sub">${rows.length} ${rows.length === 1 ? 'unos' : 'unosa'} · ${h.members.length} ${plural(h.members.length, 'član', 'člana', 'članova')}</div>
+      ${total > 0 ? `
+      <div class="hh-bar">${people.filter((p) => p.val > 0).map((p) => `<i style="width:${(p.val / total) * 100}%;background:${p.color}"></i>`).join('')}</div>
+      <div class="hh-people">${people.map((p) => `
+        <div class="hh-person"><span class="dot" style="background:${p.color}"></span>
+          <span class="hp-name">${esc(p.name)}</span>
+          <span class="hp-val">${money(p.val)}<span class="p">${total ? Math.round((p.val / total) * 100) : 0}%</span></span></div>`).join('')}
+      </div>` : ''}
+    </div>
+
+    ${catList.length ? `
+    <div class="section-title"><span>Na što trošimo</span></div>
+    <div class="group">
+      ${donutChart('expense', catList, total, monthName(m))}
+      ${catList.map(([id, val]) => {
+        const c = cat('expense', id);
+        return `
+        <button type="button" class="row cat-row legend ${state.filterCat === id ? 'on' : ''} ${state.filterCat && state.filterCat !== id ? 'dim' : ''}" data-cat="${id}" style="--c:${c.color}">
+          <span class="ico-sq">${c.icon}</span>
+          <span class="main"><span class="top"><span>${esc(c.label)}<span class="p">${Math.round((val / total) * 100)}%</span></span><span>${money(val)}</span></span></span>
+        </button>`;
+      }).join('')}
+    </div>` : ''}
+
+    <div class="section-title"><span>Zajednički unosi</span>
+      ${state.filterCat ? `<button type="button" class="filter-chip" id="clear-cat">${cat('expense', state.filterCat).icon} ${esc(cat('expense', state.filterCat).label)} <span class="x">✕</span></button>` : ''}</div>
+    ${groups.length ? groups.map((g) => `
+      <div class="group-header"><span>${dayLabel(g.date)}</span><span>${money(sum(g.rows))}</span></div>
+      <div class="group">${g.rows.map((r) => itemRow('expense', r)).join('')}</div>`).join('')
+      : '<div class="group empty">Još nema zajedničkih troškova u ovom mjesecu.<br>Kod unosa troška uključi <b>Zajedničko</b>.</div>'}
+  `;
+
+  $('#prev-m').addEventListener('click', () => changeMonth(-1));
+  $('#next-m').addEventListener('click', () => changeMonth(1));
+  $('#clear-cat')?.addEventListener('click', () => { state.filterCat = null; render(); });
+  wireScopeSwitch(v);
+  const pick = (id) => { state.filterCat = state.filterCat === id ? null : id; render(); };
+  $$('.cat-row[data-cat]', v).forEach((b) => b.addEventListener('click', () => pick(b.dataset.cat)));
+  $$('.donut .seg[data-cat]', v).forEach((s) => s.addEventListener('click', () => pick(s.dataset.cat)));
+  wireItems('expense', v, rows);
+  animateDonut(v, `${isoDate(m)}|household`);
+  countUp(v);
+}
+
 async function renderPregled() {
+  if (hh() && state.scope === 'household') return renderPregledHousehold();
   const m = state.month;
   const prev = addMonths(m, -1);
   const from = isoDate(prev);
@@ -1480,6 +1630,7 @@ async function renderPregled() {
       <span class="m">${monthName(m)} ${m.getFullYear()}.</span>
       <button type="button" id="next-m" aria-label="Sljedeći mjesec" ${isCurrent ? 'disabled' : ''}>${CHEVRON_R}</button>
     </div>
+    ${scopeSwitch()}
 
     ${nothing ? `<div class="group empty">Svi dijelovi Pregleda su skriveni.<br>
       <button type="button" class="btn-plain" id="go-layout">Odaberi što prikazati</button></div>` : ''}
@@ -1487,6 +1638,7 @@ async function renderPregled() {
     ${body}
   `;
   $('#go-layout')?.addEventListener('click', openOverviewLayout);
+  wireScopeSwitch(v);
   $$('#goal-add, #goal-first', v).forEach((b) => b.addEventListener('click', () => openGoalEdit(null)));
   $$('.goal-row', v).forEach((b) => b.addEventListener('click', () => openGoal(goals.find((g) => g.id === b.dataset.id))));
 
@@ -1673,6 +1825,8 @@ function renderPostavke() {
     </div>
     <div class="group-footer">Dodaj svoje kategorije, promijeni naziv, ikonu ili boju i sakrij one koje ne koristiš.</div>
 
+    ${householdSection()}
+
     <div class="group-header"><span>Računi i kartice</span></div>
     <div class="group">
       <label class="row"><span class="label">Prati račune</span>
@@ -1797,6 +1951,7 @@ function renderPostavke() {
   $$('.acc-item', v).forEach((b) => b.addEventListener('click', () => openAccount(accById(b.dataset.id))));
 
   wireRecurringSection(v);
+  wireHouseholdSection(v);
   $('#overview-layout').addEventListener('click', openOverviewLayout);
   $('#cats-expense').addEventListener('click', () => openCategories('expense'));
   $('#cats-income').addEventListener('click', () => openCategories('income'));
@@ -2169,6 +2324,101 @@ function wireReorder(list, onDone) {
   });
 }
 
+// ---------- Postavke: kućanstvo ----------
+function householdSection() {
+  const header = '<div class="group-header"><span>Kućanstvo</span></div>';
+  if (!state.householdReady) {
+    return `${header}<div class="group"><div class="row"><span class="label muted-text">Za zajedničke troškove jednom pokreni <b>supabase/household.sql</b> u Supabaseu.</span></div></div>`;
+  }
+  const h = hh();
+  if (!h) {
+    return `${header}
+      <div class="group">
+        <button type="button" class="row tinted add-acc" id="hh-create"><span class="plus-ico">+</span><span class="label">Napravi kućanstvo</span></button>
+        <button type="button" class="row tinted add-acc" id="hh-join"><span class="plus-ico">#</span><span class="label">Pridruži se kodom</span></button>
+      </div>
+      <div class="group-footer">Poveži se s partnerom ili cimerom: zajedničke troškove vidite i uređujete oboje, a osobni ostaju samo tvoji.</div>`;
+  }
+  return `${header}
+    <div class="group">
+      <div class="row" style="--sep-left:60px"><span class="ico-sq" style="--c:var(--tint)">🏠</span><span class="label"><b>${esc(h.name)}</b></span></div>
+      ${h.members.map((m) => `
+        <div class="row" style="--sep-left:60px"><span class="ico-sq" style="--c:var(--green)">👤</span>
+          <span class="label">${esc(m.display_name)}</span>${m.user_id === state.user.id ? '<span class="value">Ti</span>' : ''}</div>`).join('')}
+      <button type="button" class="row" id="hh-code" style="--sep-left:60px">
+        <span class="ico-sq" style="--c:var(--tint)">🔑</span><span class="label">Kod za pridruživanje</span>
+        <span class="value hh-code">${esc(h.code)}</span></button>
+    </div>
+    <div class="group-footer">Pošalji kod osobi s kojom živiš; ona ga upiše pod Postavke → Kućanstvo → Pridruži se kodom.</div>
+    <div class="group"><button type="button" class="row center destructive" id="hh-leave">Napusti kućanstvo</button></div>`;
+}
+
+function wireHouseholdSection(v) {
+  $('#hh-create', v)?.addEventListener('click', () => openHouseholdForm('create'));
+  $('#hh-join', v)?.addEventListener('click', () => openHouseholdForm('join'));
+  $('#hh-code', v)?.addEventListener('click', async () => {
+    const text = `Pridruži mi se u FinPlusu: Postavke → Kućanstvo → Pridruži se kodom, kod ${hh().code}`;
+    try {
+      if (navigator.share) await navigator.share({ text });
+      else { await navigator.clipboard.writeText(hh().code); toast('Kod kopiran'); }
+    } catch { /* korisnik je odustao */ }
+  });
+  $('#hh-leave', v)?.addEventListener('click', async () => {
+    if (!confirm(`Napustiti kućanstvo „${hh().name}"? Tvoji zajednički troškovi postaju osobni, a zajedničke troškove drugih više nećeš vidjeti.`)) return;
+    try {
+      await db.leaveHousehold();
+      await loadHousehold();
+      toast('Kućanstvo je napušteno');
+      render();
+    } catch (e) { toast(errorText(e), true); }
+  });
+}
+
+// Novo kućanstvo (mode 'create') ili pridruživanje kodom ('join')
+function openHouseholdForm(mode) {
+  const create = mode === 'create';
+  const sheet = $('#sheet');
+  const suggested = (state.user.email || '').split('@')[0].replace(/[._\d]+/g, ' ').trim().split(' ')[0] || '';
+  sheet.innerHTML = `
+    <div class="sheet-bar">
+      <div class="grab"></div>
+      <div class="bar-row">
+        <button type="button" class="left" id="hf-cancel">Odustani</button>
+        <h2>${create ? 'Novo kućanstvo' : 'Pridruži se'}</h2>
+        <button type="submit" class="right" form="hh-form">${create ? 'Napravi' : 'Pridruži se'}</button>
+      </div>
+    </div>
+    <form id="hh-form" novalidate>
+      <div class="group">
+        ${create
+          ? '<label class="row"><input class="row-input" id="hf-name" placeholder="Naziv (npr. Naš stan)" maxlength="40" autocomplete="off"></label>'
+          : '<label class="row"><input class="row-input hh-code-input" id="hf-code" placeholder="Kod (npr. K7P2QX)" maxlength="6" autocapitalize="characters" autocomplete="off"></label>'}
+        <label class="row"><input class="row-input" id="hf-display" placeholder="Tvoje ime (vide ga ostali)" maxlength="30" value="${esc(suggested.charAt(0).toUpperCase() + suggested.slice(1))}" autocomplete="off"></label>
+      </div>
+      <div class="group-footer">${create
+        ? 'Nakon toga dobiješ kod koji pošalješ osobi s kojom živiš.'
+        : 'Kod ti daje osoba koja je napravila kućanstvo (Postavke → Kućanstvo).'}</div>
+    </form>`;
+  openSheet();
+
+  $('#hf-cancel').addEventListener('click', closeSheet);
+  $('#hh-form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const display = $('#hf-display').value.trim();
+    const value = create ? $('#hf-name').value.trim() : $('#hf-code').value.trim().toUpperCase();
+    if (!value) return toast(create ? 'Upiši naziv kućanstva' : 'Upiši kod', true);
+    if (!display) return toast('Upiši svoje ime', true);
+    try {
+      if (create) await db.createHousehold(value, display);
+      else await db.joinHousehold(value, display);
+      await loadHousehold();
+      closeSheet();
+      toast(create ? 'Kućanstvo je napravljeno' : `Sada si u kućanstvu „${hh()?.name}"`);
+      render();
+    } catch (e) { toast(errorText(e), true); }
+  });
+}
+
 // ---------- Postavke: ponavljajući unosi ----------
 function recurringSection() {
   const header = '<div class="group-header"><span>Ponavljajući unosi</span></div>';
@@ -2408,7 +2658,10 @@ function openEdit(kind, r) {
       </div>
     </div>
     <form id="edit-form" novalidate>
-      ${entryFields(kind, { amount: r.amount.toFixed(2).replace('.', ','), category: picked, note: r.note, date: r.date, account: r.account_id })}
+      ${entryFields(kind, {
+        amount: r.amount.toFixed(2).replace('.', ','), category: picked, note: r.note, date: r.date,
+        account: r.account_id, shared: !!r.household_id, entrant: r.user_id,
+      })}
       <div class="group">
         <button type="button" class="row center destructive" id="e-del">${K.deleteLabel}</button>
       </div>
@@ -2419,6 +2672,8 @@ function openEdit(kind, r) {
   wireFields(form);
   wireCats(form, (id) => { picked = id; });
   $('#e-cancel').addEventListener('click', closeSheet);
+  // tuđi zajednički trošak: račun (kartica) pripada toj osobi, pa ga ovdje ne mijenjamo
+  if (r.user_id && r.user_id !== state.user.id) $('.account', form)?.closest('.row')?.remove();
 
   $('#e-del').addEventListener('click', async () => {
     if (!confirm(`Obrisati ${K.sign}${money(r.amount)} · ${cat(kind, r.category).label}?`)) return;

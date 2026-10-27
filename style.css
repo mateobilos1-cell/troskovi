@@ -458,6 +458,19 @@ button.row { transition: background-color .15s; }
 }
 #add-form > .btn-filled.green { box-shadow: 0 6px 18px color-mix(in srgb, var(--green) 30%, transparent); }
 
+/* Kućanstvo */
+#scope-switch { margin: 0 0 16px; }
+.shared-mark { font-size: 13px; }
+.hh-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; gap: 2px; margin: 14px 0 10px; background: var(--fill); }
+.hh-bar i { display: block; height: 100%; }
+.hh-people { display: grid; gap: 6px; }
+.hh-person { display: flex; align-items: center; gap: 2px; font-size: 15px; letter-spacing: -.24px; }
+.hp-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hp-val { font-weight: 600; font-variant-numeric: tabular-nums; }
+.hp-val .p { color: var(--text2); font-weight: 400; margin-left: 6px; }
+.hh-code { font-family: ui-monospace, Menlo, monospace; font-weight: 600; letter-spacing: 2px; color: var(--tint); }
+.hh-code-input { text-transform: uppercase; letter-spacing: 3px; font-family: ui-monospace, Menlo, monospace; }
+
 /* Ciljevi štednje */
 .goal-row .top b { font-weight: 600; }
 .g-note { display: block; margin-top: 6px; font-size: 13px; color: var(--text2); letter-spacing: -.08px; }
