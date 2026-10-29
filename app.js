@@ -344,11 +344,126 @@ async function boot() {
   wireLock();
   faceIdAvailable().then((ok) => { state.faceId = ok; });
 
+  // fotografiranje računa: gumb otvara kameru, fotografija ide u čitač QR koda
+  $('#scan-btn').addEventListener('click', () => $('#scan-file').click());
+  $('#scan-file').addEventListener('change', (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (file) handleScan(file);
+  });
+
   db.onAuthChange((event, user) => {
     if (event === 'PASSWORD_RECOVERY') return showRecovery();
     setUser(user);
   });
   setUser(await db.getUser());
+}
+
+// ---------- Skeniranje računa (QR kod s fiskalnog računa) ----------
+// Svaki hrvatski fiskalni račun ima QR kod s poveznicom na provjeru računa u Poreznoj upravi:
+// u njoj su datum i vrijeme (datv=20261027_1430) i ukupni iznos (izn=1250 → 12,50 €).
+let jsQRLoading = null;
+function loadJsQR() {
+  if (window.jsQR) return Promise.resolve(window.jsQR);
+  jsQRLoading ||= new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
+    s.onload = () => resolve(window.jsQR);
+    s.onerror = () => { jsQRLoading = null; reject(new Error('Ne mogu učitati čitač QR koda — provjeri vezu.')); };
+    document.head.append(s);
+  });
+  return jsQRLoading;
+}
+
+// Traži QR kod na fotografiji, u nekoliko veličina (mali QR na velikoj fotografiji, mutna slika…)
+async function readQR(file) {
+  const jsQR = await loadJsQR();
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = () => reject(new Error('Fotografiju nije moguće otvoriti.'));
+      i.src = url;
+    });
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    for (const size of [1400, 1000, 2000, 700]) {
+      const scale = Math.min(1, size / Math.max(img.naturalWidth, img.naturalHeight));
+      canvas.width = Math.round(img.naturalWidth * scale);
+      canvas.height = Math.round(img.naturalHeight * scale);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      const px = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const code = jsQR(px.data, px.width, px.height, { inversionAttempts: 'attemptBoth' });
+      if (code?.data) return code.data;
+    }
+    return null;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function parseFiscalQR(text) {
+  let u;
+  try { u = new URL(String(text).trim()); } catch { return null; }
+  if (!/porezna/i.test(u.hostname)) return null;
+  const p = u.searchParams;
+  const izn = (p.get('izn') || '').trim();
+  let amount = null;
+  if (/^\d+$/.test(izn)) amount = Number(izn) / 100; // iznos u centima
+  else if (/^\d+[.,]\d{1,2}$/.test(izn)) amount = Number(izn.replace(',', '.'));
+  const d = (p.get('datv') || '').match(/^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})/);
+  if (!amount && !d) return null;
+  return {
+    amount,
+    date: d ? `${d[1]}-${d[2]}-${d[3]}` : null,
+    time: d ? `${d[4]}:${d[5]}` : null,
+    id: p.get('jir') || p.get('zki') || null,
+  };
+}
+
+// Već spremljeni računi (da se isti račun ne unese dvaput) — samo na ovom uređaju
+const SCANNED_KEY = 'fp:scanned';
+const scannedList = () => { try { return JSON.parse(localStorage.getItem(SCANNED_KEY)) || []; } catch { return []; } };
+function markScanned(id) {
+  if (!id) return;
+  try { localStorage.setItem(SCANNED_KEY, JSON.stringify([{ id, at: today() }, ...scannedList().filter((x) => x.id !== id)].slice(0, 300))); } catch { /* nedostupno */ }
+}
+
+async function handleScan(file) {
+  const btn = $('#scan-btn');
+  btn.disabled = true;
+  toast('🧾 Čitam račun…');
+  try {
+    const text = await readQR(file);
+    if (!text) return toast('Na fotografiji nije pronađen QR kod. Fotografiraj ga izbliza i oštro.', true);
+    const r = parseFiscalQR(text);
+    if (!r) return toast('Ovaj QR kod nije s hrvatskog fiskalnog računa.', true);
+    if (state.view !== 'trosak') go('trosak');
+    const form = $('#add-form');
+    if (!form) return;
+    if (r.amount) {
+      const a = $('.amount', form);
+      a.value = r.amount.toFixed(2).replace('.', ',');
+      a.dispatchEvent(new Event('input'));
+    }
+    const dateEl = $('.date', form);
+    if (r.date && dateEl) {
+      dateEl.value = r.date > today() ? today() : r.date;
+      dateEl.dispatchEvent(new Event('change'));
+    }
+    state.lastScan = r.id;
+    const seen = r.id && scannedList().find((x) => x.id === r.id);
+    $('.scan-note')?.remove();
+    form.insertAdjacentHTML('beforebegin', `<div class="scan-note">${seen
+      ? `⚠️ Ovaj račun je već unesen (${dayLabel(seen.at).toLowerCase()}). Provjeri da ga ne uneseš dvaput.`
+      : `🧾 S računa: <b>${r.amount ? money(r.amount) : '?'}</b>${r.date ? ` · ${dateChipText(r.date).toLowerCase()}${r.time ? ` u ${r.time}` : ''}` : ''}. Provjeri iznos i odaberi kategoriju.`}</div>`);
+    toast(seen ? 'Račun je već skeniran' : '✓ Račun pročitan', !!seen);
+  } catch (e) {
+    toast(errorText(e), true);
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 // ---------- Zaključavanje Face ID-jem ----------
@@ -606,6 +721,7 @@ function go(view) {
   $('#title').textContent = TITLES[view];
   $('#nav-title').textContent = TITLES[view];
   $$('.tabbar button').forEach((b) => b.classList.toggle('on', b.dataset.view === view));
+  $('#scan-btn').hidden = view !== 'trosak';
   window.scrollTo(0, 0);
   $('#navbar').classList.remove('scrolled');
   // sadržaj nove kartice lagano "izroni", a brojke se odbroje do iznosa
@@ -835,6 +951,7 @@ function wireItems(kind, root, rows) {
 async function renderEntry(kind) {
   const view = state.view;
   const v = $('#view');
+  state.lastScan = null; // nova (prazna) forma: nema skeniranog računa
   // Forma se prikaže odmah; brojke i zadnji unosi stignu kad se učitaju.
   v.innerHTML = `
     <form id="add-form" novalidate>
@@ -870,6 +987,8 @@ async function renderEntry(kind) {
         state.recurring.push(rule);
       }
       const row = await db.add(kind, { ...fields, category, ...(rule ? { recurring_id: rule.id } : {}) });
+      if (kind === 'expense' && state.lastScan) markScanned(state.lastScan);
+      state.lastScan = null;
       let saved = `${cat(kind, category).icon}  ${KINDS[kind].sign}${money(amount)} spremljeno`;
       if (row.pending) saved = `💾 ${KINDS[kind].sign}${money(amount)} spremljeno na uređaj — poslat će se kad se vrati veza`;
       if (rule) saved += ` · ponavlja se svakog ${rule.day}.`;
