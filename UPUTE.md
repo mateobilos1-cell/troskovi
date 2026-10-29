@@ -36,6 +36,18 @@ Tako će poveznice iz maila (potvrda računa, nova lozinka) voditi na tvoju apli
 
 Otvori adresu u **Safariju** → **Dijeli** → **Dodaj na početni zaslon**. Napravi račun i prijavi se.
 
+## 5. Sigurnost (preporučeno)
+
+U Supabaseu: **Authentication → Sign In / Providers → Email** (ili **Authentication → Policies / Passwords**):
+- **Confirm email**: uključeno (svaki novi račun mora potvrditi e-mail).
+- **Minimum password length**: 8, a **Password requirements**: slova i brojevi.
+
+Kad se svi prijatelji registriraju, isključi **Allow new users to sign up** — tako nitko drugi ne može napraviti račun.
+
+`vercel.json` šalje pregledniku sigurnosna pravila (npr. stranica smije razgovarati samo sa svojim Supabase projektom).
+Ako ikad promijeniš Supabase projekt, u `vercel.json` zamijeni i adresu projekta (`vsfixdcopndyiuvdygtq.supabase.co`).
+Biblioteke (Supabase, čitač QR koda) nalaze se u mapi `vendor/`, a ne učitavaju se s tuđih servera.
+
 ## Dobro je znati
 
 - **Prijatelji**: svatko napravi svoj račun i vidi samo svoje troškove.

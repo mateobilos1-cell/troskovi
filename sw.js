@@ -1,9 +1,9 @@
 // Service worker: aplikacija se otvara iz datoteka spremljenih na uređaju (brzo i bez interneta).
 // Nove verzije se preuzimaju u pozadini i vrijede od idućeg otvaranja.
-const CACHE = 'finplus-v1';
+const CACHE = 'finplus-v2';
 const SHELL = [
-  './', './index.html', './style.css', './app.js', './db.js', './config.js',
-  './manifest.webmanifest', './icons/icon-192.png', './icons/apple-touch-icon.png',
+  './', './index.html', './style.css', './app.js', './db.js', './config.js', './lock-early.js',
+  './manifest.webmanifest', './icons/icon-192.png', './icons/apple-touch-icon.png', './vendor/supabase.js',
 ];
 
 self.addEventListener('install', (e) => {
@@ -22,19 +22,9 @@ self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
-  if (url.hostname === 'cdn.jsdelivr.net') return e.respondWith(cacheFirst(req)); // biblioteke s fiksnom verzijom
-  if (url.origin !== self.location.origin) return; // Supabase i ostalo idu ravno na mrežu
+  if (url.origin !== self.location.origin) return; // Supabase ide ravno na mrežu
   e.respondWith(staleWhileRevalidate(e, req));
 });
-
-async function cacheFirst(req) {
-  const cache = await caches.open(CACHE);
-  const hit = await cache.match(req);
-  if (hit) return hit;
-  const res = await fetch(req);
-  if (res.ok) cache.put(req, res.clone());
-  return res;
-}
 
 // Odmah vrati spremljenu verziju, a u pozadini preuzmi novu za idući put
 async function staleWhileRevalidate(e, req) {

@@ -171,7 +171,7 @@ function errorText(e) {
   if (code === 'invalid_credentials' || /invalid login/i.test(msg)) return 'Pogrešan e-mail ili lozinka.';
   if (code === 'email_not_confirmed' || /not confirmed/i.test(msg)) return 'E-mail još nije potvrđen — otvori poveznicu koju smo ti poslali.';
   if (code === 'user_already_exists' || /already registered/i.test(msg)) return 'Račun s tim e-mailom već postoji. Prijavi se.';
-  if (code === 'weak_password' || /password should be/i.test(msg)) return 'Lozinka mora imati barem 6 znakova.';
+  if (code === 'weak_password' || /password should be/i.test(msg)) return 'Lozinka je preslaba — koristi barem 8 znakova, sa slovima i brojevima.';
   if (/rate limit|too many/i.test(msg)) return 'Previše pokušaja. Pričekaj malo pa pokušaj ponovno.';
   if (db.isNetworkError(e)) return 'Nema veze s internetom.';
   if (code === 'PGRST202' || /delete_my_account/.test(msg)) return 'Brisanje računa još nije uključeno — pokreni supabase/delete-account.sql u Supabaseu.';
@@ -368,7 +368,7 @@ async function boot() {
 // u njoj su datum i vrijeme (datv=20261027_1430) i ukupni iznos (izn=1250 → 12,50 €).
 // Čitač: ZXing (WebAssembly) — pronalazi i mali, nakrivljen ili mutan QR na cijeloj fotografiji.
 // Ako se ne učita, rezerva je jednostavniji jsQR.
-const ZXING = 'https://cdn.jsdelivr.net/npm/zxing-wasm@3.1.5/dist';
+// Obje biblioteke su u mapi vendor/ (zxing-wasm 3.1.5, jsQR 1.4.0).
 function loadScript(src, global) {
   if (window[global]) return Promise.resolve(window[global]);
   return new Promise((resolve, reject) => {
@@ -384,15 +384,15 @@ let qrReader = null;
 function loadQRReader() {
   qrReader ||= (async () => {
     try {
-      const Z = await loadScript(`${ZXING}/iife/reader/index.js`, 'ZXingWASM');
+      const Z = await loadScript('vendor/zxing-reader.js', 'ZXingWASM');
       await Z.prepareZXingModule({
-        overrides: { locateFile: (path, prefix) => (path.endsWith('.wasm') ? `${ZXING}/reader/${path}` : prefix + path) },
+        overrides: { locateFile: (path, prefix) => (path.endsWith('.wasm') ? new URL(`vendor/${path}`, location.href).href : prefix + path) },
         fireImmediately: true,
       });
       return async (img) => (await Z.readBarcodes(img, { formats: ['QRCode'], tryHarder: true, tryInvert: true, maxNumberOfSymbols: 4 }))
         .filter((r) => r.isValid).map((r) => r.text);
     } catch {
-      const jsQR = await loadScript('https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js', 'jsQR');
+      const jsQR = await loadScript('vendor/jsQR.js', 'jsQR');
       return async (img) => {
         const code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'attemptBoth' });
         return code?.data ? [code.data] : [];
@@ -749,7 +749,7 @@ function showAuth(mode, message) {
           autocapitalize="off" placeholder="E-mail" required></label>
         ${isReset ? '' : `<label class="row"><input class="row-input" name="password" type="password"
           autocomplete="${isLogin ? 'current-password' : 'new-password'}"
-          placeholder="${isLogin ? 'Lozinka' : 'Lozinka (barem 6 znakova)'}" required minlength="6"></label>`}
+          placeholder="${isLogin ? 'Lozinka' : 'Lozinka (barem 8 znakova)'}" required></label>`}
       </div>
       <div class="msg"></div>
       <button class="btn-filled" type="submit">${isReset ? 'Pošalji poveznicu' : isLogin ? 'Prijavi se' : 'Napravi račun'}</button>
@@ -769,7 +769,8 @@ function showAuth(mode, message) {
     const email = form.email.value.trim();
     const password = form.password?.value ?? '';
     if (!email.includes('@')) return setMsg('Upiši ispravan e-mail.');
-    if (!isReset && password.length < 6) return setMsg('Lozinka mora imati barem 6 znakova.');
+    // stare lozinke od 6+ znakova i dalje rade za prijavu; nove moraju imati barem 8
+    if (!isReset && password.length < (isLogin ? 6 : 8)) return setMsg(`Lozinka mora imati barem ${isLogin ? 6 : 8} znakova.`);
 
     const btn = $('button[type=submit]', form);
     btn.disabled = true;
@@ -802,7 +803,7 @@ function showRecovery() {
     <div class="brand"><img src="icons/icon-192.png" alt=""><h1>Nova lozinka</h1><p>Upiši novu lozinku za svoj račun.</p></div>
     <form id="pw-form" novalidate>
       <div class="group">
-        <label class="row"><input class="row-input" name="password" type="password" autocomplete="new-password" placeholder="Nova lozinka (barem 6 znakova)"></label>
+        <label class="row"><input class="row-input" name="password" type="password" autocomplete="new-password" placeholder="Nova lozinka (barem 8 znakova)"></label>
       </div>
       <div class="msg"></div>
       <button class="btn-filled" type="submit">Spremi lozinku</button>
@@ -811,7 +812,7 @@ function showRecovery() {
   form.addEventListener('submit', async (ev) => {
     ev.preventDefault();
     const msg = $('.msg', form);
-    if (form.password.value.length < 6) { msg.className = 'msg err'; msg.textContent = 'Lozinka mora imati barem 6 znakova.'; return; }
+    if (form.password.value.length < 8) { msg.className = 'msg err'; msg.textContent = 'Lozinka mora imati barem 8 znakova.'; return; }
     try {
       await db.updatePassword(form.password.value);
       state.recovering = false;
@@ -2579,20 +2580,24 @@ function householdSection() {
           <span class="label">${esc(m.display_name)}</span>${m.user_id === state.user.id ? '<span class="value">Ti</span>' : ''}</div>`).join('')}
       <button type="button" class="row" id="hh-code" style="--sep-left:60px">
         <span class="ico-sq" style="--c:var(--tint)">🔑</span><span class="label">Kod za pridruživanje</span>
-        <span class="value hh-code">${esc(h.code)}</span></button>
+        <span class="value hh-code">${esc(fmtCode(h.code))}</span></button>
     </div>
     <div class="group-footer">Pošalji kod osobi s kojom živiš; ona ga upiše pod Postavke → Kućanstvo → Pridruži se kodom.</div>
     <div class="group"><button type="button" class="row center destructive" id="hh-leave">Napusti kućanstvo</button></div>`;
 }
 
+// Kod kućanstva u dvije skupine radi lakšeg prepisivanja: ABCDE-FGHJK
+const fmtCode = (c) => (String(c).length === 10 ? `${c.slice(0, 5)}-${c.slice(5)}` : String(c));
+
 function wireHouseholdSection(v) {
   $('#hh-create', v)?.addEventListener('click', () => openHouseholdForm('create'));
   $('#hh-join', v)?.addEventListener('click', () => openHouseholdForm('join'));
   $('#hh-code', v)?.addEventListener('click', async () => {
-    const text = `Pridruži mi se u FinPlusu: Postavke → Kućanstvo → Pridruži se kodom, kod ${hh().code}`;
+    const code = fmtCode(hh().code);
+    const text = `Pridruži mi se u FinPlusu: Postavke → Kućanstvo → Pridruži se kodom, kod ${code}`;
     try {
       if (navigator.share) await navigator.share({ text });
-      else { await navigator.clipboard.writeText(hh().code); toast('Kod kopiran'); }
+      else { await navigator.clipboard.writeText(code); toast('Kod kopiran'); }
     } catch { /* korisnik je odustao */ }
   });
   $('#hh-leave', v)?.addEventListener('click', async () => {
@@ -2624,7 +2629,7 @@ function openHouseholdForm(mode) {
       <div class="group">
         ${create
           ? '<label class="row"><input class="row-input" id="hf-name" placeholder="Naziv (npr. Naš stan)" maxlength="40" autocomplete="off"></label>'
-          : '<label class="row"><input class="row-input hh-code-input" id="hf-code" placeholder="Kod (npr. K7P2QX)" maxlength="6" autocapitalize="characters" autocomplete="off"></label>'}
+          : '<label class="row"><input class="row-input hh-code-input" id="hf-code" placeholder="Kod (npr. K7P2Q-XM4TA)" maxlength="16" autocapitalize="characters" autocorrect="off" spellcheck="false" autocomplete="off"></label>'}
         <label class="row"><input class="row-input" id="hf-display" placeholder="Tvoje ime (vide ga ostali)" maxlength="30" value="${esc(suggested.charAt(0).toUpperCase() + suggested.slice(1))}" autocomplete="off"></label>
       </div>
       <div class="group-footer">${create
@@ -2637,7 +2642,7 @@ function openHouseholdForm(mode) {
   $('#hh-form').addEventListener('submit', async (ev) => {
     ev.preventDefault();
     const display = $('#hf-display').value.trim();
-    const value = create ? $('#hf-name').value.trim() : $('#hf-code').value.trim().toUpperCase();
+    const value = create ? $('#hf-name').value.trim() : $('#hf-code').value.toUpperCase().replace(/[^A-Z0-9]/g, '');
     if (!value) return toast(create ? 'Upiši naziv kućanstva' : 'Upiši kod', true);
     if (!display) return toast('Upiši svoje ime', true);
     try {

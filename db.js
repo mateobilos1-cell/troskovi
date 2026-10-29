@@ -10,8 +10,15 @@ export const isDemo = forceDemo || !SUPABASE_URL || !SUPABASE_ANON_KEY;
 
 let sb = null;
 if (!isDemo) {
-  const { createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm');
-  sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  // biblioteka je u mapi vendor/ (supabase-js 2.45.4), a ne s tuđeg servera — nitko je ne može podmetnuti
+  await new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = new URL('./vendor/supabase.js', import.meta.url).href;
+    s.onload = resolve;
+    s.onerror = () => reject(new Error('Aplikaciju nije moguće učitati — provjeri vezu.'));
+    document.head.append(s);
+  });
+  sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 }
 
 const appUrl = () => location.origin + location.pathname;
@@ -331,7 +338,9 @@ const supa = {
     return { ...h, members };
   },
   async createHousehold(name, displayName) { check(await sb.rpc('create_household', { p_name: name, p_display: displayName })); },
-  async joinHousehold(code, displayName) { check(await sb.rpc('join_household', { p_code: code, p_display: displayName })); },
+  async joinHousehold(code, displayName) {
+    if (!check(await sb.rpc('join_household', { p_code: code, p_display: displayName }))) throw new Error('Kod nije ispravan.');
+  },
   async leaveHousehold() { check(await sb.rpc('leave_household')); },
 };
 
@@ -557,7 +566,7 @@ const demo = (() => {
     household: () => copy(load().household || null),
     createHousehold(name, displayName) {
       load().household = {
-        id: uid(), name, code: Math.random().toString(36).slice(2, 8).toUpperCase(),
+        id: uid(), name, code: Array.from(crypto.getRandomValues(new Uint8Array(10)), (b) => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 32]).join(''),
         members: [{ user_id: 'demo', display_name: displayName }],
       };
       save();
@@ -566,7 +575,7 @@ const demo = (() => {
       load();
       const hid = uid();
       mem.household = {
-        id: hid, name: 'Naš stan', code: String(code).toUpperCase(),
+        id: hid, name: 'Naš stan', code: String(code).toUpperCase().replace(/[^A-Z0-9]/g, ''),
         members: [{ user_id: 'ana', display_name: 'Ana' }, { user_id: 'demo', display_name: displayName }],
       };
       const now = new Date();

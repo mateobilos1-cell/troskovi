@@ -41,6 +41,36 @@ create or replace function public.account_belongs(acc uuid, owner uuid) returns 
     return true;
   end $$;
 
+-- Kod za pridruživanje: 10 nasumičnih znakova (bez 0/O i 1/I) — oko 10^15 mogućnosti, ne može se pogoditi.
+-- gen_random_uuid() koristi kriptografski sigurne nasumične brojeve.
+create or replace function public.new_household_code() returns text
+  language plpgsql volatile set search_path = ''
+  as $$
+  declare a text := 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; b bytea; c text;
+  begin
+    loop
+      b := uuid_send(gen_random_uuid());
+      c := '';
+      -- bajtovi 6 i 8 UUID-a nisu potpuno nasumični (verzija/varijanta) pa se preskaču
+      for i in 0..9 loop c := c || substr(a, get_byte(b, case when i < 6 then i else i + 4 end) % 32 + 1, 1); end loop;
+      exit when not exists (select 1 from public.households where code = c);
+    end loop;
+    return c;
+  end $$;
+revoke all on function public.new_household_code() from public, anon, authenticated;
+
+-- Stari kratki kodovi (6 znakova) zamjenjuju se novima; tko je već član, ostaje član
+update public.households set code = public.new_household_code() where char_length(code) < 10;
+
+-- Neuspjeli pokušaji pridruživanja (najviše 5 na sat po korisniku — zaštita od pogađanja koda)
+create table if not exists public.household_join_attempts (
+  user_id  uuid not null references auth.users (id) on delete cascade,
+  at       timestamptz not null default now()
+);
+create index if not exists household_join_attempts_idx on public.household_join_attempts (user_id, at);
+alter table public.household_join_attempts enable row level security; -- bez pravila: dostupno samo funkcijama ispod
+revoke all on public.household_join_attempts from anon, authenticated;
+
 -- Novo kućanstvo s kodom za pridruživanje
 create or replace function public.create_household(p_name text, p_display text) returns uuid
   language plpgsql security definer set search_path = ''
@@ -51,16 +81,13 @@ create or replace function public.create_household(p_name text, p_display text) 
     if exists (select 1 from public.household_members where user_id = uid) then
       raise exception 'Već si u kućanstvu.';
     end if;
-    loop
-      c := upper(substr(md5(random()::text || clock_timestamp()::text), 1, 6));
-      exit when not exists (select 1 from public.households where code = c);
-    end loop;
+    c := public.new_household_code();
     insert into public.households (name, code, created_by) values (trim(p_name), c, uid) returning id into hid;
     insert into public.household_members (household_id, user_id, display_name) values (hid, uid, trim(p_display));
     return hid;
   end $$;
 
--- Pridruživanje kodom
+-- Pridruživanje kodom. Za pogrešan kod vraća null (a ne grešku), da zapis o pokušaju ostane spremljen.
 create or replace function public.join_household(p_code text, p_display text) returns uuid
   language plpgsql security definer set search_path = ''
   as $$
@@ -70,8 +97,16 @@ create or replace function public.join_household(p_code text, p_display text) re
     if exists (select 1 from public.household_members where user_id = uid) then
       raise exception 'Već si u kućanstvu.';
     end if;
-    select id into hid from public.households where code = upper(trim(p_code));
-    if hid is null then raise exception 'Kod nije ispravan.'; end if;
+    delete from public.household_join_attempts where at < now() - interval '1 day';
+    if (select count(*) from public.household_join_attempts where user_id = uid and at > now() - interval '1 hour') >= 5 then
+      raise exception 'Previše pogrešnih pokušaja. Pokušaj ponovno za sat vremena.';
+    end if;
+    select id into hid from public.households
+      where code = upper(regexp_replace(coalesce(p_code, ''), '[^A-Za-z0-9]', '', 'g'));
+    if hid is null then
+      insert into public.household_join_attempts (user_id) values (uid);
+      return null;
+    end if;
     if (select count(*) from public.household_members where household_id = hid) >= 6 then
       raise exception 'Kućanstvo je puno.';
     end if;
