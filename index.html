@@ -37,7 +37,7 @@
         <svg viewBox="0 0 24 24"><path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h1.6l1.2-1.8c.2-.3.6-.5 1-.5h3.4c.4 0 .8.2 1 .5L15.9 6h1.6A2.5 2.5 0 0 1 20 8.5v8a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5z"/><circle cx="12" cy="12.3" r="3.4"/></svg>
         <span>Račun</span>
       </button>
-      <input type="file" id="scan-file" accept="image/*" capture="environment" hidden>
+      <input type="file" id="scan-file" accept="image/*" hidden>
     </div>
     <div id="sync-banner" role="status" hidden></div>
     <main id="view"></main>
@@ -64,6 +64,20 @@
   <!-- Donji prozor za uređivanje troška -->
   <div id="sheet-backdrop" hidden></div>
   <section id="sheet" hidden></section>
+
+  <!-- Skener QR koda s računa (živa kamera) -->
+  <div id="scanner" role="dialog" aria-label="Skeniraj račun" hidden>
+    <video id="scan-video" playsinline muted autoplay></video>
+    <div class="scan-frame"><i></i><i></i><i></i><i></i></div>
+    <p class="scan-hint" id="scan-hint">Usmjeri kameru na QR kod na dnu računa</p>
+    <div class="scan-actions">
+      <button type="button" id="scan-close">Odustani</button>
+      <button type="button" id="scan-torch" aria-label="Svjetiljka" hidden>
+        <svg viewBox="0 0 24 24"><path d="M8 3h8v4l-2 3v10a1 1 0 0 1-1 1h-2a1 1 0 0 1-1-1V10L8 7z"/><path d="M12 13v2"/></svg>
+      </button>
+      <button type="button" id="scan-photo">Iz fotografije</button>
+    </div>
+  </div>
 
   <!-- Zaključani zaslon (Face ID) -->
   <div id="lock" role="dialog" aria-label="FinPlus je zaključan">

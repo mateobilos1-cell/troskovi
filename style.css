@@ -508,6 +508,41 @@ button.row { transition: background-color .15s; }
 .dep-row .amt { font-variant-numeric: tabular-nums; font-weight: 600; }
 
 /* Zaključani zaslon (Face ID) */
+/* Skener QR koda (živa kamera preko cijelog zaslona) */
+#scanner {
+  position: fixed; inset: 0; z-index: 40; background: #000; color: #fff;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+}
+#scanner[hidden] { display: none; }
+#scan-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.scan-frame {
+  position: relative; width: min(68vw, 300px); aspect-ratio: 1; border-radius: 22px;
+  box-shadow: 0 0 0 100vmax rgba(0, 0, 0, .45);
+}
+.scan-frame i { position: absolute; width: 34px; height: 34px; border: 4px solid #fff; }
+.scan-frame i:nth-child(1) { top: 0; left: 0; border-width: 4px 0 0 4px; border-top-left-radius: 22px; }
+.scan-frame i:nth-child(2) { top: 0; right: 0; border-width: 4px 4px 0 0; border-top-right-radius: 22px; }
+.scan-frame i:nth-child(3) { bottom: 0; left: 0; border-width: 0 0 4px 4px; border-bottom-left-radius: 22px; }
+.scan-frame i:nth-child(4) { bottom: 0; right: 0; border-width: 0 4px 4px 0; border-bottom-right-radius: 22px; }
+.scan-hint {
+  position: relative; margin: 26px 32px 0; padding: 8px 14px; border-radius: 12px; text-align: center;
+  background: rgba(0, 0, 0, .5); font-size: 15px; font-weight: 500; letter-spacing: -.24px;
+}
+.scan-hint.warn { background: rgba(255, 149, 0, .85); }
+.scan-actions {
+  position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px calc(20px + env(safe-area-inset-bottom));
+}
+.scan-actions button {
+  border: 0; border-radius: 999px; padding: 11px 18px; font: inherit; font-size: 17px; letter-spacing: -.41px;
+  color: #fff; background: rgba(60, 60, 67, .6); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
+}
+#scan-torch { width: 52px; height: 52px; padding: 0; display: grid; place-items: center; }
+#scan-torch[hidden] { display: none; }
+#scan-torch svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; stroke-linecap: round; }
+#scan-torch.on { background: #fff; color: #000; }
+.scan-actions button:active { opacity: .7; }
+
 #lock { display: none; }
 html.locked #lock {
   position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column; align-items: center; justify-content: center;

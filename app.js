@@ -344,13 +344,17 @@ async function boot() {
   wireLock();
   faceIdAvailable().then((ok) => { state.faceId = ok; });
 
-  // fotografiranje računa: gumb otvara kameru, fotografija ide u čitač QR koda
-  $('#scan-btn').addEventListener('click', () => $('#scan-file').click());
+  // skeniranje računa: gumb otvara živu kameru; fotografija iz galerije je rezervna mogućnost
+  $('#scan-btn').addEventListener('click', openScanner);
+  $('#scan-close').addEventListener('click', closeScanner);
+  $('#scan-torch').addEventListener('click', toggleTorch);
+  $('#scan-photo').addEventListener('click', () => { closeScanner(); $('#scan-file').click(); });
   $('#scan-file').addEventListener('change', (e) => {
     const file = e.target.files?.[0];
     e.target.value = '';
-    if (file) handleScan(file);
+    if (file) handleScanFile(file);
   });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) closeScanner(); });
 
   db.onAuthChange((event, user) => {
     if (event === 'PASSWORD_RECOVERY') return showRecovery();
@@ -362,22 +366,61 @@ async function boot() {
 // ---------- Skeniranje računa (QR kod s fiskalnog računa) ----------
 // Svaki hrvatski fiskalni račun ima QR kod s poveznicom na provjeru računa u Poreznoj upravi:
 // u njoj su datum i vrijeme (datv=20261027_1430) i ukupni iznos (izn=1250 → 12,50 €).
-let jsQRLoading = null;
-function loadJsQR() {
-  if (window.jsQR) return Promise.resolve(window.jsQR);
-  jsQRLoading ||= new Promise((resolve, reject) => {
+// Čitač: ZXing (WebAssembly) — pronalazi i mali, nakrivljen ili mutan QR na cijeloj fotografiji.
+// Ako se ne učita, rezerva je jednostavniji jsQR.
+const ZXING = 'https://cdn.jsdelivr.net/npm/zxing-wasm@3.1.5/dist';
+function loadScript(src, global) {
+  if (window[global]) return Promise.resolve(window[global]);
+  return new Promise((resolve, reject) => {
     const s = document.createElement('script');
-    s.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
-    s.onload = () => resolve(window.jsQR);
-    s.onerror = () => { jsQRLoading = null; reject(new Error('Ne mogu učitati čitač QR koda — provjeri vezu.')); };
+    s.src = src;
+    s.onload = () => (window[global] ? resolve(window[global]) : reject(new Error('load')));
+    s.onerror = () => { s.remove(); reject(new Error('load')); };
     document.head.append(s);
   });
-  return jsQRLoading;
 }
 
-// Traži QR kod na fotografiji, u nekoliko veličina (mali QR na velikoj fotografiji, mutna slika…)
-async function readQR(file) {
-  const jsQR = await loadJsQR();
+let qrReader = null;
+function loadQRReader() {
+  qrReader ||= (async () => {
+    try {
+      const Z = await loadScript(`${ZXING}/iife/reader/index.js`, 'ZXingWASM');
+      await Z.prepareZXingModule({
+        overrides: { locateFile: (path, prefix) => (path.endsWith('.wasm') ? `${ZXING}/reader/${path}` : prefix + path) },
+        fireImmediately: true,
+      });
+      return async (img) => (await Z.readBarcodes(img, { formats: ['QRCode'], tryHarder: true, tryInvert: true, maxNumberOfSymbols: 4 }))
+        .filter((r) => r.isValid).map((r) => r.text);
+    } catch {
+      const jsQR = await loadScript('https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js', 'jsQR');
+      return async (img) => {
+        const code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'attemptBoth' });
+        return code?.data ? [code.data] : [];
+      };
+    }
+  })().catch(() => {
+    qrReader = null;
+    throw new Error('Ne mogu učitati čitač QR koda — provjeri vezu.');
+  });
+  return qrReader;
+}
+
+// Pikseli slike ili kadra kamere, smanjeni da duža stranica bude najviše `max`
+function pixels(source, w, h, max, canvas = document.createElement('canvas')) {
+  const scale = Math.min(1, max / Math.max(w, h));
+  canvas.width = Math.round(w * scale);
+  canvas.height = Math.round(h * scale);
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+  return ctx.getImageData(0, 0, canvas.width, canvas.height);
+}
+
+// Od pročitanih QR kodova vrati onaj s fiskalnog računa (ili prvi ako nijedan nije)
+const pickFiscal = (texts) => texts.find((t) => parseFiscalQR(t)) ?? texts[0] ?? null;
+
+// Traži QR kod na fotografiji, u nekoliko veličina
+async function readQRFile(file) {
+  const read = await loadQRReader();
   const url = URL.createObjectURL(file);
   try {
     const img = await new Promise((resolve, reject) => {
@@ -386,21 +429,87 @@ async function readQR(file) {
       i.onerror = () => reject(new Error('Fotografiju nije moguće otvoriti.'));
       i.src = url;
     });
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    for (const size of [1400, 1000, 2000, 700]) {
-      const scale = Math.min(1, size / Math.max(img.naturalWidth, img.naturalHeight));
-      canvas.width = Math.round(img.naturalWidth * scale);
-      canvas.height = Math.round(img.naturalHeight * scale);
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      const px = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const code = jsQR(px.data, px.width, px.height, { inversionAttempts: 'attemptBoth' });
-      if (code?.data) return code.data;
+    for (const size of [2400, 1400, 3600, 900]) {
+      const texts = await read(pixels(img, img.naturalWidth, img.naturalHeight, size));
+      if (texts.length) return pickFiscal(texts);
     }
     return null;
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+// ---- Živa kamera: čita kadrove dok ne pronađe QR kod ----
+const scan = { stream: null, timer: 0, run: 0, torch: false };
+async function openScanner() {
+  if (!navigator.mediaDevices?.getUserMedia) return $('#scan-file').click();
+  const run = ++scan.run;
+  const box = $('#scanner'), hint = $('#scan-hint');
+  hint.textContent = 'Usmjeri kameru na QR kod na dnu računa';
+  hint.classList.remove('warn');
+  $('#scan-torch').hidden = true;
+  box.hidden = false;
+  try {
+    const [stream, read] = await Promise.all([
+      navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      }),
+      loadQRReader(),
+    ]);
+    if (run !== scan.run) return stream.getTracks().forEach((t) => t.stop()); // u međuvremenu zatvoreno
+    scan.stream = stream;
+    scan.torch = false;
+    const video = $('#scan-video');
+    video.srcObject = stream;
+    await video.play().catch(() => {});
+    const track = stream.getVideoTracks()[0];
+    $('#scan-torch').hidden = !track?.getCapabilities?.().torch;
+    $('#scan-torch').classList.remove('on');
+    scanLoop(run, video, read, document.createElement('canvas'));
+  } catch (e) {
+    if (run !== scan.run) return;
+    closeScanner();
+    if (e?.name === 'NotAllowedError') toast('Kamera nije dopuštena — odaberi fotografiju računa.', true);
+    else if (/čitač/.test(e?.message)) return toast(e.message, true);
+    $('#scan-file').click();
+  }
+}
+
+async function scanLoop(run, video, read, canvas) {
+  if (run !== scan.run) return;
+  if (video.videoWidth) {
+    try {
+      const text = pickFiscal(await read(pixels(video, video.videoWidth, video.videoHeight, 1920, canvas)));
+      if (run !== scan.run) return;
+      if (text && parseFiscalQR(text)) {
+        closeScanner();
+        return applyScan(text);
+      }
+      if (text) {
+        $('#scan-hint').textContent = 'Ovo nije QR kod s hrvatskog fiskalnog računa';
+        $('#scan-hint').classList.add('warn');
+      }
+    } catch { /* pokušaj sa sljedećim kadrom */ }
+  }
+  scan.timer = setTimeout(() => scanLoop(run, video, read, canvas), 120);
+}
+
+async function toggleTorch() {
+  const track = scan.stream?.getVideoTracks()[0];
+  if (!track) return;
+  scan.torch = !scan.torch;
+  try { await track.applyConstraints({ advanced: [{ torch: scan.torch }] }); } catch { scan.torch = false; }
+  $('#scan-torch').classList.toggle('on', scan.torch);
+}
+
+function closeScanner() {
+  scan.run++;
+  clearTimeout(scan.timer);
+  scan.stream?.getTracks().forEach((t) => t.stop());
+  scan.stream = null;
+  $('#scan-video').srcObject = null;
+  $('#scanner').hidden = true;
 }
 
 function parseFiscalQR(text) {
@@ -430,40 +539,44 @@ function markScanned(id) {
   try { localStorage.setItem(SCANNED_KEY, JSON.stringify([{ id, at: today() }, ...scannedList().filter((x) => x.id !== id)].slice(0, 300))); } catch { /* nedostupno */ }
 }
 
-async function handleScan(file) {
+async function handleScanFile(file) {
   const btn = $('#scan-btn');
   btn.disabled = true;
   toast('🧾 Čitam račun…');
   try {
-    const text = await readQR(file);
-    if (!text) return toast('Na fotografiji nije pronađen QR kod. Fotografiraj ga izbliza i oštro.', true);
-    const r = parseFiscalQR(text);
-    if (!r) return toast('Ovaj QR kod nije s hrvatskog fiskalnog računa.', true);
-    if (state.view !== 'trosak') go('trosak');
-    const form = $('#add-form');
-    if (!form) return;
-    if (r.amount) {
-      const a = $('.amount', form);
-      a.value = r.amount.toFixed(2).replace('.', ',');
-      a.dispatchEvent(new Event('input'));
-    }
-    const dateEl = $('.date', form);
-    if (r.date && dateEl) {
-      dateEl.value = r.date > today() ? today() : r.date;
-      dateEl.dispatchEvent(new Event('change'));
-    }
-    state.lastScan = r.id;
-    const seen = r.id && scannedList().find((x) => x.id === r.id);
-    $('.scan-note')?.remove();
-    form.insertAdjacentHTML('beforebegin', `<div class="scan-note">${seen
-      ? `⚠️ Ovaj račun je već unesen (${dayLabel(seen.at).toLowerCase()}). Provjeri da ga ne uneseš dvaput.`
-      : `🧾 S računa: <b>${r.amount ? money(r.amount) : '?'}</b>${r.date ? ` · ${dateChipText(r.date).toLowerCase()}${r.time ? ` u ${r.time}` : ''}` : ''}. Provjeri iznos i odaberi kategoriju.`}</div>`);
-    toast(seen ? 'Račun je već skeniran' : '✓ Račun pročitan', !!seen);
+    const text = await readQRFile(file);
+    if (!text) return toast('Na fotografiji nije pronađen QR kod. Pokušaj oštriju fotografiju.', true);
+    applyScan(text);
   } catch (e) {
     toast(errorText(e), true);
   } finally {
     btn.disabled = false;
   }
+}
+
+function applyScan(text) {
+  const r = parseFiscalQR(text);
+  if (!r) return toast('Ovaj QR kod nije s hrvatskog fiskalnog računa.', true);
+  if (state.view !== 'trosak') go('trosak');
+  const form = $('#add-form');
+  if (!form) return;
+  if (r.amount) {
+    const a = $('.amount', form);
+    a.value = r.amount.toFixed(2).replace('.', ',');
+    a.dispatchEvent(new Event('input'));
+  }
+  const dateEl = $('.date', form);
+  if (r.date && dateEl) {
+    dateEl.value = r.date > today() ? today() : r.date;
+    dateEl.dispatchEvent(new Event('change'));
+  }
+  state.lastScan = r.id;
+  const seen = r.id && scannedList().find((x) => x.id === r.id);
+  $('.scan-note')?.remove();
+  form.insertAdjacentHTML('beforebegin', `<div class="scan-note">${seen
+    ? `⚠️ Ovaj račun je već unesen (${dayLabel(seen.at).toLowerCase()}). Provjeri da ga ne uneseš dvaput.`
+    : `🧾 S računa: <b>${r.amount ? money(r.amount) : '?'}</b>${r.date ? ` · ${dateChipText(r.date).toLowerCase()}${r.time ? ` u ${r.time}` : ''}` : ''}. Provjeri iznos i odaberi kategoriju.`}</div>`);
+  toast(seen ? 'Račun je već skeniran' : '✓ Račun pročitan', !!seen);
 }
 
 // ---------- Zaključavanje Face ID-jem ----------
