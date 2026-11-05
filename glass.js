@@ -5,79 +5,6 @@
 
 const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
 
-// ---------- Opruga: pokret bez unaprijed zadanog trajanja, kao na iOS-u ----------
-const moving = new Set();
-let frame = 0;
-let last = 0;
-
-function advance(s, dt) {
-  const x = s.value - s.target;
-  const v = s.velocity;
-  const half = s.damping / 2;
-  const disc = half * half - s.stiffness;
-  if (Math.abs(disc) < 1e-4) {
-    const decay = Math.exp(-half * dt);
-    const b = v + half * x;
-    s.value = s.target + decay * (x + b * dt);
-    s.velocity = decay * (v - half * b * dt);
-  } else if (disc > 0) {
-    const root = Math.sqrt(disc);
-    const r1 = -half + root;
-    const r2 = -half - root;
-    const a = (v - r2 * x) / (r1 - r2);
-    const b = x - a;
-    s.value = s.target + a * Math.exp(r1 * dt) + b * Math.exp(r2 * dt);
-    s.velocity = a * r1 * Math.exp(r1 * dt) + b * r2 * Math.exp(r2 * dt);
-  } else {
-    const omega = Math.sqrt(-disc);
-    const decay = Math.exp(-half * dt);
-    const cos = Math.cos(omega * dt);
-    const sin = Math.sin(omega * dt);
-    s.value = s.target + decay * (x * cos + ((v + half * x) / omega) * sin);
-    s.velocity = decay * (v * cos - ((half * v + s.stiffness * x) / omega) * sin);
-  }
-}
-
-function tick(time) {
-  frame = 0;
-  const dt = Math.min(0.1, Math.max(0, (time - last) / 1000));
-  last = time;
-  for (const s of moving) {
-    advance(s, dt);
-    if (Math.abs(s.value - s.target) < 1e-4 && Math.abs(s.velocity) < 0.001) {
-      s.value = s.target;
-      s.velocity = 0;
-      moving.delete(s);
-    }
-    s.paint(s.value);
-  }
-  if (moving.size) frame = requestAnimationFrame(tick);
-}
-
-function spring(value, paint) {
-  const s = { value, target: value, velocity: 0, stiffness: 1, damping: 1, paint };
-  return {
-    set(target, instant = false) {
-      s.target = target;
-      if (instant || document.hidden || matchMedia('(prefers-reduced-motion: reduce)').matches) {
-        s.value = target;
-        s.velocity = 0;
-        moving.delete(s);
-        return paint(target);
-      }
-      moving.add(s);
-      if (!frame) {
-        last = performance.now();
-        frame = requestAnimationFrame(tick);
-      }
-    },
-    tune(stiffness, damping) {
-      s.stiffness = stiffness;
-      s.damping = damping;
-    },
-  };
-}
-
 // ---------- Svijetli rub ----------
 // Svjetlo pada na gornji lijevi i donji desni rub, pa se rub crta u sliku prema obliku elementa.
 const RIM_WIDTH = 1.22;
@@ -94,6 +21,7 @@ function parseColour(colour) {
   return [r, g, b, a];
 }
 
+// Slika se sažima u pozadini (toBlob), da crtanje ruba ne zaustavi animaciju koja je u tijeku
 function rimImage(width, height, radius, shine, edge, density) {
   const columns = Math.max(1, Math.round(width * density));
   const rows = Math.max(1, Math.round(height * density));
@@ -135,10 +63,10 @@ function rimImage(width, height, radius, shine, edge, density) {
     }
   }
   context.putImageData(image, 0, 0);
-  return `url("${canvas.toDataURL()}")`;
+  return new Promise((resolve) => canvas.toBlob((blob) => resolve(`url("${URL.createObjectURL(blob)}")`)));
 }
 
-function paintRim(el) {
+async function paintRim(el) {
   const width = el.offsetWidth;
   const height = el.offsetHeight;
   if (!width || !height) return;
@@ -147,15 +75,15 @@ function paintRim(el) {
   const radius = Math.min(width / 2, height / 2, corner.endsWith('%') ? (Math.min(width, height) * parseFloat(corner)) / 100 : parseFloat(corner) || 0);
   const shine = clamp(parseFloat(style.getPropertyValue('--lg-rim-shine')) || 0.13, 0, 1);
   const edge = parseColour(style.getPropertyValue('--lg-edge').trim() || 'transparent');
-  const density = Math.min(devicePixelRatio || 1, 3);
+  const density = Math.min(devicePixelRatio || 1, 2);
   const key = [width, height, radius, shine, edge, density].join('|');
   if (!rims.has(key)) rims.set(key, rimImage(width, height, radius, shine, edge, density));
-  el.style.setProperty('--lg-rim', rims.get(key));
+  el.style.setProperty('--lg-rim', await rims.get(key));
   el.setAttribute('data-rim', '');
 }
 
 // Prati sve staklene elemente, i one koje aplikacija doda kasnije (npr. gumbe u donjem prozoru)
-const GLASS = '.lg-glass, .sheet-bar button, .tab-lens';
+const GLASS = '.lg-glass, .sheet-bar button, .tab-face';
 
 export function startGlass() {
   document.addEventListener('touchstart', () => {}, { passive: true }); // bez ovoga iOS ne prikazuje :active
@@ -173,15 +101,15 @@ export function startGlass() {
 
 // ---------- Traka s karticama ----------
 // Istaknuti dio je leća: pritiskom se podigne, može se povući preko kartica, a pušten sjedne na karticu.
-const REST = [1024, 58.9, 676, 47.8]; // klizanje, prigušenje, podizanje, prigušenje
-const DRAG = [2500, 94, 576, 44.2];
-const GROW_X = 24;
-const GROW_Y = 16;
-
+// Pokret radi preglednik (CSS prijelazi nad transform i opacity), pa ide glatko i dok se
+// nova kartica iscrtava; zato ovdje nema animacije po sličicama.
 export function liquidTabBar(bar) {
   const tabs = [...bar.querySelectorAll('button')];
   const lens = document.createElement('div');
   lens.className = 'tab-lens';
+  const face = document.createElement('div');
+  face.className = 'tab-face';
+  lens.append(face);
   const tint = document.createElement('div');
   tint.className = 'tab-tint';
   tint.setAttribute('aria-hidden', 'true');
@@ -198,46 +126,32 @@ export function liquidTabBar(bar) {
   bar.append(lens, tint);
 
   let slot = 0;
-  let width = 0;
-  let height = 0;
   let padding = 0;
   let active = -1;
   let shown = false;
+  let at = 0;
   let gesture = null;
   let suppressClick = false;
-  const now = { x: 0, lift: 0 };
 
   const measure = () => {
     padding = parseFloat(getComputedStyle(bar).paddingLeft) || 0;
     slot = (bar.clientWidth - 2 * padding) / tabs.length;
-    width = slot;
-    height = lens.offsetHeight;
     lens.style.width = tint.style.width = `${slot}px`;
     row.style.width = `${slot * tabs.length}px`;
   };
-  const mark = () => bar.toggleAttribute('data-away', active < 0 || Math.abs(now.x - active * slot) > 0.5);
-  const paint = () => {
-    const { x, lift } = now;
-    if (!width || !height) return;
-    const sx = 1 + (GROW_X / width) * lift;
-    const sy = 1 + (GROW_Y / height) * lift;
-    lens.style.transform = tint.style.transform = `translateX(${x}px) scale(${sx}, ${sy})`;
-    lens.style.setProperty('--lg-lift', String(clamp(lift, 0, 1)));
-    row.style.transform = `scale(${1 / sx}, ${1 / sy}) translate(${-x + (sx - 1) * (width / 2)}px, ${(sy - 1) * (height / 2)}px)`;
-    mark();
-  };
-  const x = spring(0, (v) => { now.x = v; paint(); });
-  const lift = spring(0, (v) => { now.lift = v; paint(); });
-  const move = (target, lifted, instant = false) => {
-    const [slide, slideDamp, up, upDamp] = gesture ? DRAG : REST;
-    x.tune(slide, slideDamp);
-    lift.tune(up, upDamp);
-    x.set(target, instant);
-    lift.set(lifted ? 1 : 0, instant);
+  const place = (x, instant) => {
+    const moved = Math.abs(x - at) > 0.5;
+    bar.toggleAttribute('data-instant', instant);
+    at = x;
+    lens.style.transform = tint.style.transform = `translateX(${x}px)`;
+    row.style.transform = `translateX(${-x}px)`;
+    // dok leća putuje, odabrana kartica se vidi i izvan nje
+    if (moved && !instant) bar.setAttribute('data-away', '');
+    else if (instant || !lens.getAnimations().length) bar.removeAttribute('data-away');
   };
   const settle = (instant = false) => {
-    if (gesture || active < 0) return;
-    move(active * slot, false, instant || !shown);
+    if (gesture || active < 0 || !slot) return;
+    place(active * slot, instant || !shown);
     shown = true;
   };
   const position = (e) => clamp(gesture.anchor + e.clientX - gesture.x, 0, slot * (tabs.length - 1));
@@ -248,6 +162,9 @@ export function liquidTabBar(bar) {
     return old;
   };
 
+  lens.addEventListener('transitionend', (e) => {
+    if (e.target === lens) bar.removeAttribute('data-away');
+  });
   bar.addEventListener('pointerdown', (e) => {
     const tab = e.target.closest('button');
     if (!e.isPrimary || e.button !== 0 || gesture || !tab) return;
@@ -255,8 +172,7 @@ export function liquidTabBar(bar) {
     gesture = { id: e.pointerId, x: e.clientX, anchor: tabs.indexOf(tab) * slot, moved: false, box: bar.getBoundingClientRect() };
     suppressClick = false;
     bar.dataset.lifted = '';
-    move(gesture.anchor, true, !shown);
-    shown = true;
+    place(gesture.anchor, false);
   });
   window.addEventListener('pointermove', (e) => {
     if (e.pointerId !== gesture?.id) return;
@@ -264,7 +180,9 @@ export function liquidTabBar(bar) {
       gesture.moved = true;
       bar.setPointerCapture(e.pointerId);
     }
-    if (gesture.moved) move(position(e), true);
+    if (!gesture.moved) return;
+    place(position(e), true); // leća prati prst bez kašnjenja
+    bar.setAttribute('data-away', '');
   });
   const end = (e) => {
     if (e.pointerId !== gesture?.id) return;
@@ -274,8 +192,8 @@ export function liquidTabBar(bar) {
     if (e.type === 'pointerup' && (moved || near)) {
       suppressClick = true; // preglednikov klik nakon ovoga bi otvorio karticu ispod prsta
       tabs[index]?.click();
-      settle();
-    } else settle();
+    }
+    settle();
   };
   window.addEventListener('pointerup', end);
   window.addEventListener('pointercancel', end);
@@ -291,7 +209,6 @@ export function liquidTabBar(bar) {
   new ResizeObserver(() => {
     measure();
     settle(true);
-    paint();
   }).observe(bar);
   measure();
 
@@ -299,7 +216,6 @@ export function liquidTabBar(bar) {
     setActive(index) {
       active = index;
       settle();
-      mark();
     },
   };
 }

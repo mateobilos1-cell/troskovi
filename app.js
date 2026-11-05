@@ -321,7 +321,11 @@ boot();
 
 async function boot() {
   if (db.isDemo) document.body.classList.add('demo');
-  $$('.tabbar button').forEach((b) => b.addEventListener('click', () => go(b.dataset.view)));
+  // leća kreće odmah, a nova kartica se iscrtava tek kad je animacija već predana pregledniku
+  $$('.tabbar button').forEach((b, i) => b.addEventListener('click', () => {
+    tabBar.setActive(i);
+    requestAnimationFrame(() => requestAnimationFrame(() => go(b.dataset.view)));
+  }));
   tabBar = liquidTabBar($('.tabbar'));
   startGlass();
   $('#sheet-backdrop').addEventListener('click', closeSheet);
