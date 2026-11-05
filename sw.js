@@ -1,8 +1,8 @@
 // Service worker: aplikacija se otvara iz datoteka spremljenih na uređaju (brzo i bez interneta).
 // Nove verzije se preuzimaju u pozadini i vrijede od idućeg otvaranja.
-const CACHE = 'finplus-v2';
+const CACHE = 'finplus-v3';
 const SHELL = [
-  './', './index.html', './style.css', './app.js', './db.js', './config.js', './lock-early.js',
+  './', './index.html', './style.css', './app.js', './db.js', './glass.js', './config.js', './lock-early.js',
   './manifest.webmanifest', './icons/icon-192.png', './icons/apple-touch-icon.png', './vendor/supabase.js',
 ];
 

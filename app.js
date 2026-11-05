@@ -1,4 +1,5 @@
 import * as db from './db.js';
+import { startGlass, liquidTabBar } from './glass.js';
 
 // ---------- Kategorije ----------
 // id se sprema u bazu — ne mijenjaj postojeće id-jeve, slobodno mijenjaj nazive, ikone i boje.
@@ -315,11 +316,14 @@ async function loadAccounts() {
 }
 
 // ---------- Pokretanje ----------
+let tabBar = null;
 boot();
 
 async function boot() {
   if (db.isDemo) document.body.classList.add('demo');
   $$('.tabbar button').forEach((b) => b.addEventListener('click', () => go(b.dataset.view)));
+  tabBar = liquidTabBar($('.tabbar'));
+  startGlass();
   $('#sheet-backdrop').addEventListener('click', closeSheet);
 
   // Veliki naslov se pri skrolanju "skupi" u traku na vrhu, kao na iOS-u
@@ -834,7 +838,10 @@ function go(view) {
   lastDonutKey = null;
   $('#title').textContent = TITLES[view];
   $('#nav-title').textContent = TITLES[view];
-  $$('.tabbar button').forEach((b) => b.classList.toggle('on', b.dataset.view === view));
+  $$('.tabbar button').forEach((b, i) => {
+    b.classList.toggle('on', b.dataset.view === view);
+    if (b.dataset.view === view) tabBar.setActive(i);
+  });
   $('#scan-btn').hidden = view !== 'trosak';
   window.scrollTo(0, 0);
   $('#navbar').classList.remove('scrolled');
