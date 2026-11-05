@@ -25,6 +25,8 @@
   --shadow: 0 8px 30px rgba(0, 0, 0, .12);
   --r-group: 22px;
   --tabbar-h: 62px;
+  /* kao u Appleovim aplikacijama: 21 px od dna na iPhoneima bez gumba (donji rub zaslona 34 px), inače 10 px */
+  --dock-bottom: max(10px, calc(env(safe-area-inset-bottom) - 13px));
   --rounded: ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color-scheme: light dark;
 }
@@ -287,8 +289,8 @@ button.row:active, button.row.pressed { background: var(--fill); }
 /* ---------- Plutajuća traka s karticama (iOS 26) ---------- */
 .tabbar {
   position: fixed; z-index: 10; left: 50%; transform: translateX(-50%);
-  bottom: max(10px, env(safe-area-inset-bottom));
-  width: min(calc(100% - 32px), 420px); height: var(--tabbar-h);
+  bottom: var(--dock-bottom);
+  width: min(calc(100% - 42px), 420px); height: var(--tabbar-h);
   display: flex; padding: 4px; border-radius: 999px;
   --lg-cast: var(--shadow);
   -webkit-user-select: none; user-select: none;
@@ -538,7 +540,7 @@ button.row { transition: background-color .15s; }
 /* gumb Spremi ostaje vidljiv iznad donje trake i na manjim ekranima */
 #add-form > .btn-filled {
   position: sticky; z-index: 4;
-  bottom: calc(var(--tabbar-h) + max(10px, env(safe-area-inset-bottom)) + 10px);
+  bottom: calc(var(--tabbar-h) + var(--dock-bottom) + 10px);
   box-shadow: 0 6px 18px color-mix(in srgb, var(--tint) 30%, transparent);
 }
 #add-form > .btn-filled.green { box-shadow: 0 6px 18px color-mix(in srgb, var(--green) 30%, transparent); }
